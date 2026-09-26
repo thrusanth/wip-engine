@@ -1,7 +1,5 @@
 # WIP Exception Engine
 
-**Neurolabs Edge: Inventory Reconciliation**
-
 The **WIP (Work In Progress) Exception Engine** is an enterprise-grade solution designed to bridge the gap between shelf-edge Computer Vision (CV) out-of-stock detections and real-time inventory telemetry. By reconciling visual shelf data with backroom staging and inventory manifests, the engine identifies and tracks execution anomalies, phantom drift, and shrink risks in real-time.
 
 ## Overview
