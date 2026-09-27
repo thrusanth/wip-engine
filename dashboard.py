@@ -52,26 +52,45 @@ with left_col:
     st.warning("⚠️ **PHANTOM DRIFT:** 3 units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
 
 # ==========================================
-# RIGHT COLUMN: Scenario 2 - The Ghost Case
+# RIGHT COLUMN: Scenario 2 - Proof-of-Fill
 # ==========================================
 with right_col:
-    st.subheader("Vision Exception Task: FT-01")
+    st.subheader("Vision Task: FT-01")
     st.caption("Last Known State: IN_PROGRESS_SHOPFLOOR | Zone: Aisle 2")
     
     st.markdown("**SKU Profile:** `CHOCO-BISCUITS-6PK`")
     
-    # Empty space for alignment
-    st.markdown("<br>", unsafe_allow_html=True)
+    # Calculate state
+    initial_load = 12
+    routed_to_backstock = 6
+    cv_fill_events = 6
+    remaining_on_flattop = initial_load - routed_to_backstock - cv_fill_events
+    
+    # Internal columns for clean metric display
+    metrics_c3, metrics_c4 = st.columns(2)
+    
+    with metrics_c3:
+        st.metric("Expected Quantity", initial_load)
+        st.metric("Routed to Backstock", routed_to_backstock)
+        
+    with metrics_c4:
+        st.metric("CV Fill Events", cv_fill_events)
+        st.metric("Remaining on Flattop", remaining_on_flattop)
+        
+    st.markdown("---")
     
     # High-priority alert bridging CV and the WIP API
-    st.error(
-        "🚨 **COMPUTER VISION:** Aisle 2 Shelf Empty. "
-        "WIP API: 6 units of CHOCO-BISCUITS-6PK abandoned off-camera."
-    )
-    
-    # Empty space for alignment before the button
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Simulated Action Button
-    if st.button("Dispatch Task: Retrieve Ghost Case from Backroom", type="primary", use_container_width=True):
-        st.success("✅ **Task Dispatched successfully!** A shift leader has been notified via their Zebra device.")
+    if remaining_on_flattop == 0:
+        st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked via CV fill events and backstock routing.")
+    else:
+        st.error(
+            "🚨 **COMPUTER VISION:** Aisle 2 Shelf Empty. "
+            f"WIP API: {remaining_on_flattop} units of CHOCO-BISCUITS-6PK abandoned off-camera."
+        )
+        
+        # Empty space for alignment before the button
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Simulated Action Button
+        if st.button("Dispatch Task: Retrieve Ghost Case from Backroom", type="primary", use_container_width=True):
+            st.success("✅ **Task Dispatched successfully!** A shift leader has been notified via their Zebra device.")
