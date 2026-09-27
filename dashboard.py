@@ -11,13 +11,31 @@ st.set_page_config(
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
 
+# Global State Calculations
+# Calculate Scenario 1 Drift (Static for mock purpose, but represents actual unworked/lost stock)
+scenario_1_drift = 3
+
+# Calculate Scenario 2 Drift dynamically based on session state
+scenario_2_expected = 12
+scenario_2_cv_filled = 6
+scenario_2_variance = scenario_2_expected - scenario_2_cv_filled
+
+# Initialize session state for resolution tracking early so global metrics can read it
+if 'variance_resolved' not in st.session_state:
+    st.session_state.variance_resolved = False
+    st.session_state.resolution_message = ""
+    st.session_state.confirmed_units = 0
+
+# If resolved, the variance is accounted for by confirmed backstock
+scenario_2_active_drift = 0 if st.session_state.variance_resolved else scenario_2_variance
+
+total_global_drift = scenario_1_drift + scenario_2_active_drift
+
 # 2. Top Header Section: Global Metrics
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 with col1:
-    st.metric(label="Active CV Out-of-Stocks", value=1, delta="Critical", delta_color="inverse")
+    st.metric(label="Detected Phantom Drift Units", value=total_global_drift, delta="Shrink Risk", delta_color="inverse")
 with col2:
-    st.metric(label="Detected Phantom Drift Units", value=9, delta="Shrink Risk", delta_color="inverse")
-with col3:
     st.metric(label="Pending Edge Tasks", value=2, delta="Unresolved")
 
 # Visual Divider
@@ -64,12 +82,6 @@ with right_col:
     initial_load = 12
     cv_fill_events = 6
     unaccounted_variance = initial_load - cv_fill_events
-    
-    # Initialize session state for resolution tracking
-    if 'variance_resolved' not in st.session_state:
-        st.session_state.variance_resolved = False
-        st.session_state.resolution_message = ""
-        st.session_state.confirmed_units = 0
     
     # Internal columns for clean metric display
     metrics_c3, metrics_c4 = st.columns(2)
