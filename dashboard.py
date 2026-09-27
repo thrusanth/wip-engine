@@ -16,9 +16,18 @@ st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Det
 scenario_1_expected = 12
 scenario_1_worked = 6
 scenario_1_backstock = 2
-scenario_1_drift = scenario_1_expected - scenario_1_worked - scenario_1_backstock
+scenario_1_drift_initial = scenario_1_expected - scenario_1_worked - scenario_1_backstock
+
+# Initialize session state for FT-02 resolution tracking
+if 'ft2_resolved' not in st.session_state:
+    st.session_state.ft2_resolved = False
+    st.session_state.ft2_resolution_type = ""
+    st.session_state.ft2_recovered_units = 0
+
+# Apply resolution impacts to FT-02 state
+scenario_1_drift = scenario_1_drift_initial - st.session_state.ft2_recovered_units
 scenario_1_variance = 0
-scenario_1_pending = 1 if (scenario_1_drift > 0 or scenario_1_variance > 0) else 0
+scenario_1_pending = 0 if st.session_state.ft2_resolved else (1 if scenario_1_drift > 0 else 0)
 
 # Calculate Scenario 2 (FT-01)
 scenario_2_expected = 12
@@ -85,8 +94,55 @@ with left_col:
             
         st.markdown("---")
         
-        # Warning block for the phantom drift
-        st.warning(f"⚠️ **PHANTOM DRIFT:** {scenario_1_drift} units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
+        if st.session_state.ft2_resolved:
+            if st.session_state.ft2_resolution_type == "all":
+                st.success("✅ **Resolved:** All 4 units recovered and accounted for.")
+            elif st.session_state.ft2_resolution_type == "none":
+                st.error("🚨 **Shrink Confirmed:** 4 units officially lost/unaccounted.")
+            elif st.session_state.ft2_resolution_type == "partial":
+                lost_units = scenario_1_drift_initial - st.session_state.ft2_recovered_units
+                st.warning(f"⚠️ **Partial Resolution:** {st.session_state.ft2_recovered_units} found, {lost_units} confirmed as shrink.")
+        else:
+            # Warning block for the phantom drift
+            st.warning(f"⚠️ **PHANTOM DRIFT:** {scenario_1_drift} units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Interactive Resolution Buttons for FT-02
+            col_ft2_1, col_ft2_2, col_ft2_3 = st.columns(3)
+            with col_ft2_1:
+                if st.button(f"All Found ({scenario_1_drift_initial})", key="ft2_all"):
+                    st.session_state.ft2_resolved = True
+                    st.session_state.ft2_resolution_type = "all"
+                    st.session_state.ft2_recovered_units = scenario_1_drift_initial
+                    st.rerun()
+            with col_ft2_2:
+                if st.button(f"Not Present (0)", key="ft2_none"):
+                    st.session_state.ft2_resolved = True
+                    st.session_state.ft2_resolution_type = "none"
+                    st.session_state.ft2_recovered_units = 0
+                    st.rerun()
+            with col_ft2_3:
+                # Toggle for partial input
+                if 'ft2_show_partial' not in st.session_state:
+                    st.session_state.ft2_show_partial = False
+                    
+                if st.button("Partial Found...", key="ft2_partial"):
+                    st.session_state.ft2_show_partial = not st.session_state.ft2_show_partial
+                    
+            if st.session_state.ft2_show_partial:
+                st.markdown("<br>", unsafe_allow_html=True)
+                partial_col1, partial_col2 = st.columns([2, 1])
+                with partial_col1:
+                    partial_qty = st.number_input("Quantity Recovered?", min_value=1, max_value=scenario_1_drift_initial-1, value=1)
+                with partial_col2:
+                    st.markdown("<br>", unsafe_allow_html=True) # Alignment
+                    if st.button("Confirm Partial", type="primary", key="ft2_confirm_partial"):
+                        st.session_state.ft2_resolved = True
+                        st.session_state.ft2_resolution_type = "partial"
+                        st.session_state.ft2_recovered_units = partial_qty
+                        st.session_state.ft2_show_partial = False
+                        st.rerun()
 
 # ==========================================
 # MIDDLE COLUMN: Scenario 2 - Blind Spot Detection
