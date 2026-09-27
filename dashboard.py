@@ -69,6 +69,7 @@ with right_col:
     if 'variance_resolved' not in st.session_state:
         st.session_state.variance_resolved = False
         st.session_state.resolution_message = ""
+        st.session_state.confirmed_units = 0
     
     # Internal columns for clean metric display
     metrics_c3, metrics_c4 = st.columns(2)
@@ -78,6 +79,8 @@ with right_col:
         
     with metrics_c4:
         st.metric("CV Fill Events", cv_fill_events)
+        if st.session_state.variance_resolved:
+            st.metric("Confirmed in Backstock", st.session_state.confirmed_units)
         
     st.markdown("---")
     
@@ -100,6 +103,7 @@ with right_col:
             if st.button(f"Confirm {unaccounted_variance} Units in Backstock", type="primary", use_container_width=True):
                 st.session_state.variance_resolved = True
                 st.session_state.resolution_message = "Un-shelved stock presence confirmed in backroom."
+                st.session_state.confirmed_units = unaccounted_variance
                 # Underlying state machine would log these units as CONFIRMED_BACKSTOCK here
                 st.rerun()
         else:
