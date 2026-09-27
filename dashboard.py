@@ -56,10 +56,12 @@ total_global_drift = scenario_1_drift + scenario_2_active_drift
 total_pending_tasks = scenario_1_pending + scenario_2_pending + scenario_3_pending
 
 # 2. Top Header Section: Global Metrics
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric(label="Detected Phantom Drift Units", value=total_global_drift, delta="Shrink Risk", delta_color="inverse")
+    st.metric(label="Pending Delivery Cages", value=4, delta="Awaiting Breakdown", delta_color="off")
 with col2:
+    st.metric(label="Detected Phantom Drift Units", value=total_global_drift, delta="Shrink Risk", delta_color="inverse")
+with col3:
     if total_pending_tasks > 0:
         st.metric(label="Pending Edge Tasks", value=total_pending_tasks, delta="Action Required", delta_color="inverse")
     else:
