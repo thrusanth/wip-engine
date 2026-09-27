@@ -30,7 +30,7 @@ left_col, right_col = st.columns(2)
 # LEFT COLUMN: Scenario 1 - The Chaotic Frontline
 # ==========================================
 with left_col:
-    st.subheader("Execution Telemetry: FLT-8829")
+    st.subheader("Execution Telemetry: FT-02")
     st.caption("Last Known State: ABANDONED_MID_SHIFT | Zone: Aisle 4")
     
     st.markdown("**SKU Profile:** `BAKED-BEANS-6PK`")

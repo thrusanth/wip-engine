@@ -14,7 +14,7 @@ def main():
     )
 
     container = WipContainer(
-        lpn='FLT-8829',
+        lpn='FT-02',
         current_zone='Backroom Staging',
         items=[item]
     )
