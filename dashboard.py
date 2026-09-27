@@ -13,7 +13,10 @@ st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Det
 
 # Global State Calculations
 # Calculate Scenario 1 (FT-02)
-scenario_1_drift = 3
+scenario_1_expected = 12
+scenario_1_worked = 6
+scenario_1_backstock = 2
+scenario_1_drift = scenario_1_expected - scenario_1_worked - scenario_1_backstock
 scenario_1_variance = 0
 scenario_1_pending = 1 if (scenario_1_drift > 0 or scenario_1_variance > 0) else 0
 
@@ -73,17 +76,17 @@ with left_col:
         metrics_c1, metrics_c2 = st.columns(2)
         
         with metrics_c1:
-            st.metric("Expected Quantity", 12)
-            st.metric("Sent to Backstock", 2)
+            st.metric("Expected Quantity", scenario_1_expected)
+            st.metric("Sent to Backstock", scenario_1_backstock)
             
         with metrics_c2:
-            st.metric("Worked to Shelf", 6)
-            st.metric("Dumped Unworked", 1)
+            st.metric("Worked to Shelf", scenario_1_worked)
+            st.metric("Phantom Drift", scenario_1_drift)
             
         st.markdown("---")
         
         # Warning block for the phantom drift
-        st.warning("⚠️ **PHANTOM DRIFT:** 3 units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
+        st.warning(f"⚠️ **PHANTOM DRIFT:** {scenario_1_drift} units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
 
 # ==========================================
 # MIDDLE COLUMN: Scenario 2 - Blind Spot Detection
