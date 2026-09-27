@@ -63,7 +63,7 @@ def main():
 
 
     # ==========================================
-    # SCENARIO 2: Uncaptured Backstock (The "Ghost Case")
+    # SCENARIO 2: CV Hand Tracking Verification (Proof-of-Fill)
     # ==========================================
     print("\n\n")
 
@@ -76,30 +76,36 @@ def main():
 
     container2 = WipContainer(
         lpn='FT-01',
-        state=ContainerState.IN_PROGRESS_SHOPFLOOR,
-        current_zone='Aisle 2',
+        state=ContainerState.STAGED_IN_BACKROOM,
+        current_zone='Backroom Staging',
         items=[item2]
     )
 
-    # 3. Simulate execution: A colleague fills 1 case (6 units) to the shelf
+    # 2. I physically take 6 units and put them directly into BACKSTOCK in the warehouse
     target_item2 = container2.items[0]
-    target_item2.actual_quantity = 6
+    target_item2.route_to_backstock(6)
+    
+    # 3. Take the remaining 6 units on Flattop-01 to the aisle.
+    container2.state = ContainerState.IN_PROGRESS_SHOPFLOOR
+    container2.current_zone = 'Aisle 2'
+    
+    # 4. The CV camera successfully tracks my hands placing all 6 units onto the shelf (CV_FILL_EVENT).
+    target_item2.cv_fill_events = 6
 
-    # 4. The remaining case is thrown straight into physical backstock without being scanned
-    target_item2.backstock_quantity = 0
-    target_item2.unworked_returned_quantity = 0
-
-    # 5. Calculate the accounted items and the phantom drift
+    # 5. Calculate remaining units on Flattop and phantom drift
+    # Remaining on Flattop = (Initial Load) - (Routed to Backstock) - (CV Fill Events)
+    remaining_on_flattop = target_item2.expected_quantity - target_item2.backstock_quantity - target_item2.cv_fill_events
+    
     accounted_items2 = (
-        target_item2.actual_quantity + 
+        target_item2.cv_fill_events + 
         target_item2.backstock_quantity + 
         target_item2.unworked_returned_quantity
     )
     phantom_drift2 = target_item2.expected_quantity - accounted_items2
 
-    # 6. Print the second cleanly formatted reconciliation report
+    # 6. Print the cleanly formatted reconciliation report
     print("="*50)
-    print(f"👻 SCENARIO 2: THE GHOST CASE RECONCILIATION")
+    print(f"📦 SCENARIO 2: PROOF-OF-FILL RECONCILIATION")
     print("="*50)
     print(f"LPN:           {container2.lpn}")
     print(f"Final State:   {container2.state.value}")
@@ -109,21 +115,18 @@ def main():
     print(f"SKU:           {target_item2.sku}")
     print(f"Expected Qty:  {target_item2.expected_quantity}")
     print("-"*50)
-    print(f"🟢 Worked to Shelf:     {target_item2.actual_quantity}")
-    print(f"🟡 Sent to Backstock:   {target_item2.backstock_quantity}")
+    print(f"🟢 CV Fill Events:      {target_item2.cv_fill_events}")
+    print(f"🟡 Routed to Backstock: {target_item2.backstock_quantity}")
     print(f"🔴 Dumped (Unworked):   {target_item2.unworked_returned_quantity}")
     print("-"*50)
-    print(f"Total Accounted:        {accounted_items2}")
+    print(f"Remaining on Flattop:   {remaining_on_flattop}")
     print(f"Phantom Drift (Shrink): {phantom_drift2}")
     
-    if phantom_drift2 > 0:
+    if remaining_on_flattop == 0 and phantom_drift2 == 0:
+        print("\n✅ [SYSTEM ACTION] Task Complete / Fully Reconciled.")
+    elif phantom_drift2 > 0:
         print(f"\n🚨 ALERT: {phantom_drift2} units of '{target_item2.sku}' are unaccounted for!")
-        print(f"   (Analysis: Suspected 'Ghost Case' - unrecorded backstock found on UOD-01)")
     print("="*50)
-    
-    if phantom_drift2 > 0:
-        print("\n[SYSTEM ACTION] Auto-generating Exception Task for Shift Leader...")
-        print(f"TASK: Verify {phantom_drift2} unaccounted units of {target_item2.sku} in Backstock Cage / Ambient Overstock.")
 
 
 if __name__ == "__main__":

@@ -35,6 +35,20 @@ class ContainerItem(BaseModel):
         ge=0, 
         description="Quantity dumped back into general warehouse areas without being worked or properly binned"
     )
+    cv_fill_events: int = Field(
+        default=0,
+        ge=0,
+        description="Quantity physically verified by CV camera tracking hand movements during shelf replenishment"
+    )
+
+    def route_to_backstock(self, quantity: int):
+        """
+        Subtract units from the active WIP container directly to backstock 
+        before or during shop floor execution.
+        """
+        if quantity > self.expected_quantity - self.backstock_quantity - self.cv_fill_events:
+            raise ValueError("Cannot route more items to backstock than are available.")
+        self.backstock_quantity += quantity
 
 
 class WipContainer(BaseModel):
