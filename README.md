@@ -1,60 +1,43 @@
-# WIP Exception Engine
-
-The **WIP (Work In Progress) Exception Engine** is an enterprise-grade solution designed to bridge the gap between shelf-edge Computer Vision (CV) out-of-stock detections and real-time inventory telemetry. By reconciling visual shelf data with backroom staging and inventory manifests, the engine identifies and tracks execution anomalies, phantom drift, and shrink risks in real-time.
+# WIP Exception Engine: Inventory Reconciliation
 
 ## Overview
 
-In modern retail and warehouse environments, what the system believes is on the shelf often diverges from reality. The WIP Exception Engine solves this by:
+The **WIP Exception Engine** is a production-grade, event-driven telemetry system designed to track execution delivery workloads and proactively isolate "Phantom Drift" (inventory missing between delivery cages, backroom staging, and the shop floor). By analyzing physical replenishment events against manifest data, this engine flags stock discrepancies in real-time, empowering retail shift leaders to take immediate resolution actions before shrinkage occurs.
 
-1. **Integrating Computer Vision:** Capturing real-time shelf-edge out-of-stock events.
-2. **Tracking Inventory Telemetry:** Monitoring the movement of Work In Progress (WIP) containers (e.g., LPNs, totes, pallets) from backroom staging to the shop floor.
-3. **Reconciling Data Streams:** Automatically correlating expected quantities with actual shelf availability to detect discrepancies like "Phantom Drift" (items that are lost or misplaced between the backroom and the shelf).
+## Architecture
 
-## Features
+This repository has been comprehensively refactored into a decoupled, event-driven architecture:
 
-- **Enterprise Dashboard:** Built with Streamlit, providing real-time execution tracking, anomaly detection, and global metrics.
-- **WIP Container Tracking:** Track the state, zone, and item manifests of individual containers (e.g., `WipContainer`, `ContainerItem`).
-- **Anomaly & Shrink Detection:** Identify potential shrink risks and phantom drift units when expected inventory does not match CV-detected shelf reality.
-- **RESTful API Routers:** Extensible routing architecture for integrating external CV and telemetry data sources.
+1. **Backend State Engine (FastAPI & Pydantic):** 
+   - A robust HTTP API powered by FastAPI that maintains the system state via a dedicated telemetry engine (`services/engine.py`).
+   - Domain rules, mathematical variance calculations, and financial shrink tracking are strictly modeled using Pydantic schemas.
+2. **Frontend Client (Streamlit):**
+   - A stateless frontend dashboard (`dashboard.py`) that acts purely as a UI client.
+   - It fetches real-time telemetry from the backend and triggers resolution events via API POST requests, cleanly decoupling the visual layer from the business logic.
 
-## Repository Structure
+## Core Features
 
-- `dashboard.py`: Main Streamlit application providing the enterprise dashboard.
-- `models/`: Domain models including `WipContainer` and `ContainerItem` state management.
-- `routers/`: API route handlers for external integrations.
-- `test_drift.py`: Testing and simulation script for modeling "Phantom Drift" and anomalous inventory scenarios.
+- **Execution Telemetry:** Monitor real-time progress across physical containers (Delivery Cages, Flattops) as stock transitions through various zones (Backroom Staging, Shop Floor).
+- **Phantom Drift Detection:** Automatically flag when expected inventory quantities diverge from physical execution (e.g., Computer Vision fill events and recorded backstock), isolating potential shrinkage immediately.
+- **Financial Shrink Tracking:** Dynamically calculate the monetary impact of unresolved phantom drift in real-time based on specific SKU values.
+- **3-Way Interactive Resolution:** Shift leaders can address edge tasks directly from the dashboard by confirming stock as "All Found" (backstock), "Not Present" (confirming shrink), or "Partial Found" (split resolution).
 
-## Getting Started
+## Running Locally
 
-### Prerequisites
+To run the decoupled architecture locally, you will need to start both the backend API and the frontend dashboard in separate terminal instances.
 
-- Python 3.8+
-- [Streamlit](https://streamlit.io/)
-
-### Installation
-
-Clone the repository and install the required dependencies (if a `requirements.txt` is provided, otherwise ensure Streamlit is installed):
+### 1. Start the FastAPI Backend
+Ensure your virtual environment is active and dependencies are installed, then run the FastAPI server:
 
 ```bash
-pip install streamlit
+python3 -m fastapi dev main.py
 ```
+*(The API will be available at `http://localhost:8000`. You can view the Swagger UI documentation at `http://localhost:8000/docs`)*
 
-### Running the Dashboard
-
-Launch the enterprise dashboard using Streamlit:
+### 2. Start the Streamlit Frontend
+In a new terminal window, start the Streamlit client:
 
 ```bash
-streamlit run dashboard.py
+python3 -m streamlit run dashboard.py
 ```
-
-### Running Tests
-
-Execute the drift scenario tests to see the exception engine in action:
-
-```bash
-python test_drift.py
-```
-
-## Architecture Notes
-
-The system leverages a state-driven approach for containers. Each WIP container transitions through various states and zones (e.g., Backroom Staging -> Shop Floor), updating its item manifest as it is worked. If a CV out-of-stock event persists despite a container being marked as "worked" for that SKU, the engine flags a discrepancy for immediate investigation.
+*(The dashboard will automatically open in your browser, connecting to the local API backend).*
