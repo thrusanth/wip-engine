@@ -42,7 +42,7 @@ with col2:
 st.divider()
 
 # 3. Main Content Sections
-left_col, right_col = st.columns(2)
+left_col, middle_col, right_col = st.columns(3)
 
 # ==========================================
 # LEFT COLUMN: Scenario 1 - The Chaotic Frontline
@@ -71,9 +71,9 @@ with left_col:
         st.warning("⚠️ **PHANTOM DRIFT:** 3 units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
 
 # ==========================================
-# RIGHT COLUMN: Scenario 2 - Blind Spot Detection
+# MIDDLE COLUMN: Scenario 2 - Blind Spot Detection
 # ==========================================
-with right_col:
+with middle_col:
     with st.container(border=True):
         st.subheader("Vision Task: FT-01")
         st.caption("Last Known State: IN_PROGRESS_SHOPFLOOR | Zone: Aisle 2")
@@ -122,3 +122,38 @@ with right_col:
                     st.rerun()
             else:
                 st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
+
+# ==========================================
+# RIGHT COLUMN: Scenario 3 - High Value Fast-Moving SKU (Fully Reconciled)
+# ==========================================
+with right_col:
+    with st.container(border=True):
+        st.subheader("Vision Task: FT-03")
+        st.caption("Last Known State: RETURNED_MIXED | Zone: Aisle 7")
+        
+        st.markdown("**SKU Profile:** `PERONI-12PK`")
+        
+        # Calculate state
+        ft3_expected = 12
+        ft3_cv_filled = 7
+        ft3_confirmed_backstock = 5
+        ft3_variance = ft3_expected - ft3_cv_filled - ft3_confirmed_backstock
+        
+        # Internal columns for clean metric display
+        metrics_c5, metrics_c6 = st.columns(2)
+        
+        with metrics_c5:
+            st.metric("Expected Quantity", ft3_expected)
+            
+        with metrics_c6:
+            st.metric("CV Fill Events", ft3_cv_filled)
+            st.metric("Confirmed in Backstock", ft3_confirmed_backstock)
+            
+        st.markdown("---")
+        
+        if ft3_variance == 0:
+            st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
+            st.metric("Unaccounted Variance", 0)
+        else:
+            st.metric("Unaccounted Variance", ft3_variance)
+            st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
