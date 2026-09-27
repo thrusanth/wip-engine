@@ -63,7 +63,7 @@ def main():
 
 
     # ==========================================
-    # SCENARIO 2: CV Hand Tracking Verification (Proof-of-Fill)
+    # SCENARIO 2: CV Hand Tracking Verification (Blind Spot)
     # ==========================================
     print("\n\n")
 
@@ -81,20 +81,19 @@ def main():
         items=[item2]
     )
 
-    # 2. I physically take 6 units and put them directly into BACKSTOCK in the warehouse
+    # 2. 6 units go directly to an untracked backstock cage. This is invisible to the system.
     target_item2 = container2.items[0]
-    target_item2.route_to_backstock(6)
     
-    # 3. Take the remaining 6 units on Flattop-01 to the aisle.
+    # 3. Take the remaining units on Flattop-01 to the aisle.
     container2.state = ContainerState.IN_PROGRESS_SHOPFLOOR
     container2.current_zone = 'Aisle 2'
     
-    # 4. The CV camera successfully tracks my hands placing all 6 units onto the shelf (CV_FILL_EVENT).
+    # 4. The CV camera successfully tracks my hands placing 6 units onto the shelf (CV_FILL_EVENT).
     target_item2.cv_fill_events = 6
 
-    # 5. Calculate remaining units on Flattop and phantom drift
-    # Remaining on Flattop = (Initial Load) - (Routed to Backstock) - (CV Fill Events)
-    remaining_on_flattop = target_item2.expected_quantity - target_item2.backstock_quantity - target_item2.cv_fill_events
+    # 5. Calculate unaccounted variance
+    # Unaccounted Variance = Expected Quantity (12) - CV Fill Events (6)
+    unaccounted_variance = target_item2.expected_quantity - target_item2.cv_fill_events
     
     accounted_items2 = (
         target_item2.cv_fill_events + 
@@ -116,13 +115,14 @@ def main():
     print(f"Expected Qty:  {target_item2.expected_quantity}")
     print("-"*50)
     print(f"🟢 CV Fill Events:      {target_item2.cv_fill_events}")
-    print(f"🟡 Routed to Backstock: {target_item2.backstock_quantity}")
     print(f"🔴 Dumped (Unworked):   {target_item2.unworked_returned_quantity}")
     print("-"*50)
-    print(f"Remaining on Flattop:   {remaining_on_flattop}")
+    print(f"Unaccounted Variance:   {unaccounted_variance}")
     print(f"Phantom Drift (Shrink): {phantom_drift2}")
     
-    if remaining_on_flattop == 0 and phantom_drift2 == 0:
+    if unaccounted_variance > 0:
+        print(f"\n⚠️ ACTION REQUIRED: {unaccounted_variance} units of '{target_item2.sku}' are unaccounted for. System suspects untracked backstock routing.")
+    elif unaccounted_variance == 0 and phantom_drift2 == 0:
         print("\n✅ [SYSTEM ACTION] Task Complete / Fully Reconciled.")
     elif phantom_drift2 > 0:
         print(f"\n🚨 ALERT: {phantom_drift2} units of '{target_item2.sku}' are unaccounted for!")

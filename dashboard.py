@@ -52,7 +52,7 @@ with left_col:
     st.warning("⚠️ **PHANTOM DRIFT:** 3 units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
 
 # ==========================================
-# RIGHT COLUMN: Scenario 2 - Proof-of-Fill
+# RIGHT COLUMN: Scenario 2 - Blind Spot Detection
 # ==========================================
 with right_col:
     st.subheader("Vision Task: FT-01")
@@ -62,35 +62,51 @@ with right_col:
     
     # Calculate state
     initial_load = 12
-    routed_to_backstock = 6
     cv_fill_events = 6
-    remaining_on_flattop = initial_load - routed_to_backstock - cv_fill_events
+    unaccounted_variance = initial_load - cv_fill_events
+    
+    # Initialize session state for resolution tracking
+    if 'variance_resolved' not in st.session_state:
+        st.session_state.variance_resolved = False
+        st.session_state.resolution_message = ""
     
     # Internal columns for clean metric display
     metrics_c3, metrics_c4 = st.columns(2)
     
     with metrics_c3:
         st.metric("Expected Quantity", initial_load)
-        st.metric("Routed to Backstock", routed_to_backstock)
         
     with metrics_c4:
         st.metric("CV Fill Events", cv_fill_events)
-        st.metric("Remaining on Flattop", remaining_on_flattop)
         
     st.markdown("---")
     
-    # High-priority alert bridging CV and the WIP API
-    if remaining_on_flattop == 0:
-        st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked via CV fill events and backstock routing.")
+    if st.session_state.variance_resolved:
+        st.success(f"✅ **Variance Resolved:** {st.session_state.resolution_message}")
+        st.metric("Unaccounted Variance", 0)
     else:
-        st.error(
-            "🚨 **COMPUTER VISION:** Aisle 2 Shelf Empty. "
-            f"WIP API: {remaining_on_flattop} units of CHOCO-BISCUITS-6PK abandoned off-camera."
-        )
-        
-        # Empty space for alignment before the button
+        st.metric("Unaccounted Variance", unaccounted_variance, delta="-6 untracked", delta_color="inverse")
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Simulated Action Button
-        if st.button("Dispatch Task: Retrieve Ghost Case from Backroom", type="primary", use_container_width=True):
-            st.success("✅ **Task Dispatched successfully!** A shift leader has been notified via their Zebra device.")
+        if unaccounted_variance > 0:
+            st.warning(
+                f"⚠️ **ACTION REQUIRED:** {unaccounted_variance} units of CHOCO-BISCUITS-6PK are unaccounted for. "
+                "System suspects untracked backstock routing."
+            )
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Interactive Resolution Buttons
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("Verify Variance left in Backstock", type="primary", use_container_width=True):
+                    st.session_state.variance_resolved = True
+                    st.session_state.resolution_message = "6 units successfully verified in Backstock Cage."
+                    st.rerun()
+            with col_btn2:
+                if st.button("Dispatch Shopfloor Ghost Case Search", use_container_width=True):
+                    st.session_state.variance_resolved = True
+                    st.session_state.resolution_message = "Task dispatched to Shopfloor Team to locate ghost case."
+                    st.rerun()
+        else:
+            st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
