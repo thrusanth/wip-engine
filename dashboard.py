@@ -1,4 +1,7 @@
 import streamlit as st
+import requests
+
+API_BASE_URL = "http://localhost:8000/api/v1"
 
 # 1. Page Configuration
 st.set_page_config(
@@ -11,236 +14,209 @@ st.set_page_config(
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
 
-# SKU Price Mapping
-sku_prices = {
-    "CHOCO-BISCUITS-6PK": 1.50,
-    "BAKED-BEANS-6PK": 1.10,
-    "PERONI-12PK": 15.00
-}
+# ---------------------------------------------------------
+# API Integration
+# ---------------------------------------------------------
+def fetch_telemetry():
+    """Fetches the latest state from the FastAPI backend."""
+    try:
+        response = requests.get(f"{API_BASE_URL}/telemetry")
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to connect to backend API: {e}")
+        st.stop()
 
-# Global State Calculations
-# Calculate Scenario 1 (FT-02)
-scenario_1_expected = 12
-scenario_1_worked = 6
-scenario_1_backstock = 2
-scenario_1_drift_initial = scenario_1_expected - scenario_1_worked - scenario_1_backstock
+def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
+    """Submits a resolution event to the FastAPI backend."""
+    payload = {
+        "container_id": container_id,
+        "sku": sku,
+        "resolution_type": resolution_type,
+        "recovered_units": recovered_units
+    }
+    try:
+        response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload)
+        response.raise_for_status()
+        st.rerun()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to submit resolution: {e}")
 
-# Initialize session state for FT-02 resolution tracking
-if 'ft2_resolved' not in st.session_state:
-    st.session_state.ft2_resolved = False
-    st.session_state.ft2_resolution_type = ""
-    st.session_state.ft2_recovered_units = 0
+# Fetch data on load
+telemetry_data = fetch_telemetry()
+if telemetry_data:
+    metrics = telemetry_data["metrics"]
+    containers = telemetry_data["containers"]
+else:
+    st.error("Failed to load telemetry data. Please ensure the backend is running.")
+    st.stop()
 
-# Apply resolution impacts to FT-02 state
-scenario_1_drift = scenario_1_drift_initial - st.session_state.ft2_recovered_units
-scenario_1_variance = 0
-scenario_1_pending = 0 if st.session_state.ft2_resolved else (1 if scenario_1_drift > 0 else 0)
-
-# Calculate Scenario 2 (FT-01)
-scenario_2_expected = 12
-scenario_2_cv_filled = 6
-scenario_2_variance_initial = scenario_2_expected - scenario_2_cv_filled
-
-# Initialize session state for resolution tracking early so global metrics can read it
-if 'variance_resolved' not in st.session_state:
-    st.session_state.variance_resolved = False
-    st.session_state.resolution_message = ""
-    st.session_state.confirmed_units = 0
-
-# If resolved, the variance is accounted for by confirmed backstock
-scenario_2_active_drift = 0 if st.session_state.variance_resolved else scenario_2_variance_initial
-scenario_2_active_variance = 0 if st.session_state.variance_resolved else scenario_2_variance_initial
-scenario_2_pending = 1 if (scenario_2_active_drift > 0 or scenario_2_active_variance > 0) else 0
-
-# Calculate Scenario 3 (FT-03)
-ft3_expected = 12
-ft3_cv_filled = 7
-ft3_confirmed_backstock = 5
-ft3_variance = ft3_expected - ft3_cv_filled - ft3_confirmed_backstock
-scenario_3_pending = 1 if ft3_variance > 0 else 0
-
-total_global_drift = scenario_1_drift + scenario_2_active_drift
-total_pending_tasks = scenario_1_pending + scenario_2_pending + scenario_3_pending
-
-# Calculate Financial Shrink Risk
-daily_shrink_cost = (scenario_1_drift * sku_prices["BAKED-BEANS-6PK"]) + \
-                    (scenario_2_active_drift * sku_prices["CHOCO-BISCUITS-6PK"]) + \
-                    (ft3_variance * sku_prices["PERONI-12PK"])
-
-# 2. Top Header Section: Global Metrics
+# ---------------------------------------------------------
+# Top Header Section: Global Metrics
+# ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric(label="Pending Delivery Cages", value=4, delta="Awaiting Breakdown", delta_color="off")
+    st.metric(label="Pending Delivery Cages", value=metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
 with col2:
-    st.metric(label="Active Flattops", value=3, delta="Live Manifests", delta_color="off")
+    st.metric(label="Active Flattops", value=metrics["active_flattops"], delta="Live Manifests", delta_color="off")
 with col3:
-    st.metric(label="Detected Phantom Drift Units", value=total_global_drift, delta="Shrink Risk", delta_color="inverse")
+    st.metric(label="Detected Phantom Drift Units", value=metrics["detected_phantom_drift"], delta="Shrink Risk", delta_color="inverse")
 with col4:
-    st.metric(label="Daily Shrink Cost", value=f"£{daily_shrink_cost:,.2f}", delta="Revenue Lost", delta_color="inverse")
+    st.metric(label="Daily Shrink Cost", value=f"£{metrics['daily_shrink_cost']:,.2f}", delta="Revenue Lost", delta_color="inverse")
 with col5:
-    if total_pending_tasks > 0:
-        st.metric(label="Pending Edge Tasks", value=total_pending_tasks, delta="Action Required", delta_color="inverse")
+    if metrics["pending_edge_tasks"] > 0:
+        st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="Action Required", delta_color="inverse")
     else:
-        st.metric(label="Pending Edge Tasks", value=total_pending_tasks, delta="All Tasks Cleared", delta_color="normal")
+        st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
 # Visual Divider
 st.divider()
 
-# 3. Main Content Sections
+# ---------------------------------------------------------
+# Main Content Sections
+# ---------------------------------------------------------
 left_col, middle_col, right_col = st.columns(3)
 
 # ==========================================
-# LEFT COLUMN: Scenario 1 - The Chaotic Frontline
+# LEFT COLUMN: Scenario 1 - The Chaotic Frontline (FT-02)
 # ==========================================
 with left_col:
     with st.container(border=True):
-        st.subheader("Execution Telemetry: FT-02")
-        st.caption("Last Known State: ABANDONED_MID_SHIFT | Zone: Aisle 4")
-        
-        st.markdown("**SKU Profile:** `BAKED-BEANS-6PK`")
-        
-        # Internal columns for clean metric display
-        metrics_c1, metrics_c2 = st.columns(2)
-        
-        with metrics_c1:
-            st.metric("Expected Quantity", scenario_1_expected)
-            st.metric("Sent to Backstock", scenario_1_backstock)
+        ft2_data = containers.get("FT-02")
+        if ft2_data:
+            sku_data = ft2_data["skus"][0]
+            st.subheader(f"Execution Telemetry: {ft2_data['id']}")
+            st.caption(f"Last Known State: {ft2_data['status']} | Zone: {ft2_data['zone']}")
             
-        with metrics_c2:
-            st.metric("Worked to Shelf", scenario_1_worked)
-            st.metric("Phantom Drift", scenario_1_drift)
+            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
             
-        st.markdown("---")
-        
-        if st.session_state.ft2_resolved:
-            if st.session_state.ft2_resolution_type == "all":
-                st.success("✅ **Resolved:** All 4 units recovered and accounted for.")
-            elif st.session_state.ft2_resolution_type == "none":
-                st.error("🚨 **Shrink Confirmed:** 4 units officially lost/unaccounted.")
-            elif st.session_state.ft2_resolution_type == "partial":
-                lost_units = scenario_1_drift_initial - st.session_state.ft2_recovered_units
-                st.warning(f"⚠️ **Partial Resolution:** {st.session_state.ft2_recovered_units} found, {lost_units} confirmed as shrink.")
-        else:
-            # Warning block for the phantom drift
-            st.warning(f"⚠️ **PHANTOM DRIFT:** {scenario_1_drift} units of 'BAKED-BEANS-6PK' are missing and completely unaccounted for in system telemetry.")
+            # Internal columns for clean metric display
+            metrics_c1, metrics_c2 = st.columns(2)
             
-            st.markdown("<br>", unsafe_allow_html=True)
+            with metrics_c1:
+                st.metric("Expected Quantity", sku_data["expected"])
+                st.metric("Sent to Backstock", sku_data["backstock"])
+                
+            with metrics_c2:
+                st.metric("Worked to Shelf", sku_data["worked"])
+                st.metric("Phantom Drift", sku_data["drift"])
+                
+            st.markdown("---")
             
-            # Interactive Resolution Buttons for FT-02
-            col_ft2_1, col_ft2_2, col_ft2_3 = st.columns(3)
-            with col_ft2_1:
-                if st.button(f"All Found ({scenario_1_drift_initial})", key="ft2_all"):
-                    st.session_state.ft2_resolved = True
-                    st.session_state.ft2_resolution_type = "all"
-                    st.session_state.ft2_recovered_units = scenario_1_drift_initial
-                    st.rerun()
-            with col_ft2_2:
-                if st.button(f"Not Present (0)", key="ft2_none"):
-                    st.session_state.ft2_resolved = True
-                    st.session_state.ft2_resolution_type = "none"
-                    st.session_state.ft2_recovered_units = 0
-                    st.rerun()
-            with col_ft2_3:
-                # Toggle for partial input
-                if 'ft2_show_partial' not in st.session_state:
-                    st.session_state.ft2_show_partial = False
-                    
-                if st.button("Partial Found...", key="ft2_partial"):
-                    st.session_state.ft2_show_partial = not st.session_state.ft2_show_partial
-                    
-            if st.session_state.ft2_show_partial:
+            if sku_data["is_resolved"]:
+                if sku_data["resolution_type"] == "all":
+                    st.success("✅ **Resolved:** All 4 units recovered and accounted for.")
+                elif sku_data["resolution_type"] == "none":
+                    st.error("🚨 **Shrink Confirmed:** 4 units officially lost/unaccounted.")
+                elif sku_data["resolution_type"] == "partial":
+                    st.warning(f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, {sku_data['shrink_confirmed']} confirmed as shrink.")
+            else:
+                # Warning block for the phantom drift
+                st.warning(f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of '{sku_data['sku']}' are missing and completely unaccounted for in system telemetry.")
+                
                 st.markdown("<br>", unsafe_allow_html=True)
-                partial_col1, partial_col2 = st.columns([2, 1])
-                with partial_col1:
-                    partial_qty = st.number_input("Quantity Recovered?", min_value=1, max_value=scenario_1_drift_initial-1, value=1)
-                with partial_col2:
-                    st.markdown("<br>", unsafe_allow_html=True) # Alignment
-                    if st.button("Confirm Partial", type="primary", key="ft2_confirm_partial"):
-                        st.session_state.ft2_resolved = True
-                        st.session_state.ft2_resolution_type = "partial"
-                        st.session_state.ft2_recovered_units = partial_qty
+                
+                # Interactive Resolution Buttons for FT-02
+                col_ft2_1, col_ft2_2, col_ft2_3 = st.columns(3)
+                with col_ft2_1:
+                    if st.button(f"All Found ({sku_data['drift']})", key="ft2_all"):
+                        submit_resolution(ft2_data["id"], sku_data["sku"], "all", sku_data["drift"])
+                with col_ft2_2:
+                    if st.button(f"Not Present (0)", key="ft2_none"):
+                        submit_resolution(ft2_data["id"], sku_data["sku"], "none", 0)
+                with col_ft2_3:
+                    # Toggle for partial input
+                    if 'ft2_show_partial' not in st.session_state:
                         st.session_state.ft2_show_partial = False
-                        st.rerun()
+                        
+                    if st.button("Partial Found...", key="ft2_partial"):
+                        st.session_state.ft2_show_partial = not st.session_state.ft2_show_partial
+                        
+                if st.session_state.get('ft2_show_partial', False):
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    partial_col1, partial_col2 = st.columns([2, 1])
+                    with partial_col1:
+                        partial_qty = st.number_input("Quantity Recovered?", min_value=1, max_value=sku_data['drift']-1, value=1)
+                    with partial_col2:
+                        st.markdown("<br>", unsafe_allow_html=True) # Alignment
+                        if st.button("Confirm Partial", type="primary", key="ft2_confirm_partial"):
+                            submit_resolution(ft2_data["id"], sku_data["sku"], "partial", partial_qty)
 
 # ==========================================
-# MIDDLE COLUMN: Scenario 2 - Blind Spot Detection
+# MIDDLE COLUMN: Scenario 2 - Blind Spot Detection (FT-01)
 # ==========================================
 with middle_col:
     with st.container(border=True):
-        st.subheader("Vision Task: FT-01")
-        st.caption("Last Known State: IN_PROGRESS_SHOPFLOOR | Zone: Aisle 2")
-        
-        st.markdown("**SKU Profile:** `CHOCO-BISCUITS-6PK`")
-        
-        # Calculate state
-        unaccounted_variance = scenario_2_active_variance
-        
-        # Internal columns for clean metric display
-        metrics_c3, metrics_c4 = st.columns(2)
-        
-        with metrics_c3:
-            st.metric("Expected Quantity", scenario_2_expected)
+        ft1_data = containers.get("FT-01")
+        if ft1_data:
+            sku_data = ft1_data["skus"][0]
+            st.subheader(f"Vision Task: {ft1_data['id']}")
+            st.caption(f"Last Known State: {ft1_data['status']} | Zone: {ft1_data['zone']}")
             
-        with metrics_c4:
-            st.metric("CV Fill Events", scenario_2_cv_filled)
-            if st.session_state.variance_resolved:
-                st.metric("Confirmed in Backstock", st.session_state.confirmed_units)
+            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
             
-        st.markdown("---")
-        
-        if st.session_state.variance_resolved:
-            st.success(f"✅ **Variance Cleared:** {st.session_state.resolution_message}")
-            st.metric("Unaccounted Variance", 0)
-        else:
-            st.metric("Unaccounted Variance", unaccounted_variance, delta="-6 untracked", delta_color="inverse")
-            st.markdown("<br>", unsafe_allow_html=True)
+            # Internal columns for clean metric display
+            metrics_c3, metrics_c4 = st.columns(2)
             
-            if unaccounted_variance > 0 or scenario_2_variance_initial > 0:
-                st.warning(
-                    f"⚠️ **ACTION REQUIRED:** {scenario_2_variance_initial} units of CHOCO-BISCUITS-6PK are unaccounted for. "
-                    "System suspects untracked backstock routing."
-                )
+            with metrics_c3:
+                st.metric("Expected Quantity", sku_data["expected"])
                 
+            with metrics_c4:
+                st.metric("CV Fill Events", sku_data["cv_filled"])
+                if sku_data["is_resolved"]:
+                    st.metric("Confirmed in Backstock", sku_data["recovered_units"])
+                
+            st.markdown("---")
+            
+            if sku_data["is_resolved"]:
+                st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
+                st.metric("Unaccounted Variance", 0)
+            else:
+                st.metric("Unaccounted Variance", sku_data["variance"], delta="-6 untracked", delta_color="inverse")
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # Interactive Resolution Button
-                if st.button(f"Confirm {scenario_2_variance_initial} Units in Backstock", type="primary", use_container_width=True):
-                    st.session_state.variance_resolved = True
-                    st.session_state.resolution_message = "Un-shelved stock presence confirmed in backroom."
-                    st.session_state.confirmed_units = scenario_2_variance_initial
-                    # Underlying state machine would log these units as CONFIRMED_BACKSTOCK here
-                    st.rerun()
-            else:
-                st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
+                if sku_data["variance"] > 0:
+                    st.warning(
+                        f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units of {sku_data['sku']} are unaccounted for. "
+                        "System suspects untracked backstock routing."
+                    )
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # Interactive Resolution Button
+                    if st.button(f"Confirm {sku_data['variance']} Units in Backstock", type="primary", use_container_width=True):
+                        submit_resolution(ft1_data["id"], sku_data["sku"], "all", sku_data["variance"])
+                else:
+                    st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
 
 # ==========================================
-# RIGHT COLUMN: Scenario 3 - High Value Fast-Moving SKU (Fully Reconciled)
+# RIGHT COLUMN: Scenario 3 - High Value Fast-Moving SKU (FT-03)
 # ==========================================
 with right_col:
     with st.container(border=True):
-        st.subheader("Vision Task: FT-03")
-        st.caption("Last Known State: RETURNED_MIXED | Zone: Aisle 7")
-        
-        st.markdown("**SKU Profile:** `PERONI-12PK`")
-        
-        # Calculate state
-        # Already calculated in global state variables
-        
-        # Internal columns for clean metric display
-        metrics_c5, metrics_c6 = st.columns(2)
-        
-        with metrics_c5:
-            st.metric("Expected Quantity", ft3_expected)
+        ft3_data = containers.get("FT-03")
+        if ft3_data:
+            sku_data = ft3_data["skus"][0]
+            st.subheader(f"Vision Task: {ft3_data['id']}")
+            st.caption(f"Last Known State: {ft3_data['status']} | Zone: {ft3_data['zone']}")
             
-        with metrics_c6:
-            st.metric("CV Fill Events", ft3_cv_filled)
-            st.metric("Confirmed in Backstock", ft3_confirmed_backstock)
+            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
             
-        st.markdown("---")
-        
-        if ft3_variance == 0:
-            st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
-            st.metric("Unaccounted Variance", 0)
-        else:
-            st.metric("Unaccounted Variance", ft3_variance)
-            st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
+            # Internal columns for clean metric display
+            metrics_c5, metrics_c6 = st.columns(2)
+            
+            with metrics_c5:
+                st.metric("Expected Quantity", sku_data["expected"])
+                
+            with metrics_c6:
+                st.metric("CV Fill Events", sku_data["cv_filled"])
+                st.metric("Confirmed in Backstock", sku_data["confirmed_backstock"])
+                
+            st.markdown("---")
+            
+            if sku_data["variance"] == 0:
+                st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
+                st.metric("Unaccounted Variance", 0)
+            else:
+                st.metric("Unaccounted Variance", sku_data["variance"])
+                st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
