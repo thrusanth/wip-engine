@@ -2,7 +2,7 @@ import streamlit as st
 
 # 1. Page Configuration
 st.set_page_config(
-    page_title="Neurolabs Edge: Inventory Reconciliation",
+    page_title="WIP Exception Engine: Inventory Reconciliation",
     layout="wide",
     initial_sidebar_state="expanded"
 )
