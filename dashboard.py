@@ -11,6 +11,13 @@ st.set_page_config(
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
 
+# SKU Price Mapping
+sku_prices = {
+    "CHOCO-BISCUITS-6PK": 1.50,
+    "BAKED-BEANS-6PK": 1.10,
+    "PERONI-12PK": 15.00
+}
+
 # Global State Calculations
 # Calculate Scenario 1 (FT-02)
 scenario_1_expected = 12
@@ -55,8 +62,13 @@ scenario_3_pending = 1 if ft3_variance > 0 else 0
 total_global_drift = scenario_1_drift + scenario_2_active_drift
 total_pending_tasks = scenario_1_pending + scenario_2_pending + scenario_3_pending
 
+# Calculate Financial Shrink Risk
+daily_shrink_cost = (scenario_1_drift * sku_prices["BAKED-BEANS-6PK"]) + \
+                    (scenario_2_active_drift * sku_prices["CHOCO-BISCUITS-6PK"]) + \
+                    (ft3_variance * sku_prices["PERONI-12PK"])
+
 # 2. Top Header Section: Global Metrics
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     st.metric(label="Pending Delivery Cages", value=4, delta="Awaiting Breakdown", delta_color="off")
 with col2:
@@ -64,6 +76,8 @@ with col2:
 with col3:
     st.metric(label="Detected Phantom Drift Units", value=total_global_drift, delta="Shrink Risk", delta_color="inverse")
 with col4:
+    st.metric(label="Daily Shrink Cost", value=f"£{daily_shrink_cost:,.2f}", delta="Revenue Lost", delta_color="inverse")
+with col5:
     if total_pending_tasks > 0:
         st.metric(label="Pending Edge Tasks", value=total_pending_tasks, delta="Action Required", delta_color="inverse")
     else:
