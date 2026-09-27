@@ -40,6 +40,11 @@ class ContainerItem(BaseModel):
         ge=0,
         description="Quantity physically verified by CV camera tracking hand movements during shelf replenishment"
     )
+    confirmed_backstock: int = Field(
+        default=0,
+        ge=0,
+        description="Quantity manually confirmed by Shift Leader as returned to backroom storage"
+    )
 
     def route_to_backstock(self, quantity: int):
         """

@@ -93,12 +93,19 @@ def main():
 
     # 5. Calculate unaccounted variance
     # Unaccounted Variance = Expected Quantity (12) - CV Fill Events (6)
-    unaccounted_variance = target_item2.expected_quantity - target_item2.cv_fill_events
+    unaccounted_variance = target_item2.expected_quantity - target_item2.cv_fill_events - target_item2.confirmed_backstock
     
+    # 5b. Simulate Shift Leader fast-paced resolution (Confirming the blind spot)
+    # The Shift Leader confirms the 6 units in the backstock.
+    target_item2.confirmed_backstock = unaccounted_variance
+    # Recalculate variance after confirmation
+    unaccounted_variance = target_item2.expected_quantity - target_item2.cv_fill_events - target_item2.confirmed_backstock
+
     accounted_items2 = (
         target_item2.cv_fill_events + 
         target_item2.backstock_quantity + 
-        target_item2.unworked_returned_quantity
+        target_item2.unworked_returned_quantity +
+        target_item2.confirmed_backstock
     )
     phantom_drift2 = target_item2.expected_quantity - accounted_items2
 
@@ -115,6 +122,7 @@ def main():
     print(f"Expected Qty:  {target_item2.expected_quantity}")
     print("-"*50)
     print(f"🟢 CV Fill Events:      {target_item2.cv_fill_events}")
+    print(f"🔵 Confirmed Backstock: {target_item2.confirmed_backstock}")
     print(f"🔴 Dumped (Unworked):   {target_item2.unworked_returned_quantity}")
     print("-"*50)
     print(f"Unaccounted Variance:   {unaccounted_variance}")
@@ -122,6 +130,8 @@ def main():
     
     if unaccounted_variance > 0:
         print(f"\n⚠️ ACTION REQUIRED: {unaccounted_variance} units of '{target_item2.sku}' are unaccounted for. System suspects untracked backstock routing.")
+    elif unaccounted_variance == 0 and target_item2.confirmed_backstock > 0:
+        print("\n✅ [SYSTEM ACTION] Variance Cleared: Un-shelved stock presence confirmed in backroom.")
     elif unaccounted_variance == 0 and phantom_drift2 == 0:
         print("\n✅ [SYSTEM ACTION] Task Complete / Fully Reconciled.")
     elif phantom_drift2 > 0:

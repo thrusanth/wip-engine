@@ -82,7 +82,7 @@ with right_col:
     st.markdown("---")
     
     if st.session_state.variance_resolved:
-        st.success(f"✅ **Variance Resolved:** {st.session_state.resolution_message}")
+        st.success(f"✅ **Variance Cleared:** {st.session_state.resolution_message}")
         st.metric("Unaccounted Variance", 0)
     else:
         st.metric("Unaccounted Variance", unaccounted_variance, delta="-6 untracked", delta_color="inverse")
@@ -96,17 +96,11 @@ with right_col:
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Interactive Resolution Buttons
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                if st.button("Verify Variance left in Backstock", type="primary", use_container_width=True):
-                    st.session_state.variance_resolved = True
-                    st.session_state.resolution_message = "6 units successfully verified in Backstock Cage."
-                    st.rerun()
-            with col_btn2:
-                if st.button("Dispatch Shopfloor Ghost Case Search", use_container_width=True):
-                    st.session_state.variance_resolved = True
-                    st.session_state.resolution_message = "Task dispatched to Shopfloor Team to locate ghost case."
-                    st.rerun()
+            # Interactive Resolution Button
+            if st.button(f"Confirm {unaccounted_variance} Units in Backstock", type="primary", use_container_width=True):
+                st.session_state.variance_resolved = True
+                st.session_state.resolution_message = "Un-shelved stock presence confirmed in backroom."
+                # Underlying state machine would log these units as CONFIRMED_BACKSTOCK here
+                st.rerun()
         else:
             st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
