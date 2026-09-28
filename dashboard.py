@@ -42,7 +42,7 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload)
         if response.status_code != 200:
             st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
-            return
+            st.stop()
         st.rerun()
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to submit resolution due to connection error: {e}")
@@ -50,12 +50,11 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
 # Fetch data on load
 try:
     telemetry_data = fetch_telemetry()
-    if telemetry_data:
-        metrics = telemetry_data["metrics"]
-        containers = telemetry_data["containers"]
-    else:
-        st.error("Failed to load telemetry data. Please ensure the backend is running.")
-        st.stop()
+    st.write("### Debug: Raw Backend Telemetry")
+    st.json(telemetry_data)
+    
+    metrics = telemetry_data["metrics"]
+    containers = telemetry_data["containers"]
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
