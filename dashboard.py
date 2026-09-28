@@ -43,12 +43,18 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         st.error(f"Failed to submit resolution: {e}")
 
 # Fetch data on load
-telemetry_data = fetch_telemetry()
-if telemetry_data:
-    metrics = telemetry_data["metrics"]
-    containers = telemetry_data["containers"]
-else:
-    st.error("Failed to load telemetry data. Please ensure the backend is running.")
+metrics = {}
+containers = {}
+try:
+    telemetry_data = fetch_telemetry()
+    if telemetry_data:
+        metrics = telemetry_data["metrics"]
+        containers = telemetry_data["containers"]
+    else:
+        st.error("Failed to load telemetry data. Please ensure the backend is running.")
+        st.stop()
+except Exception as e:
+    st.error(f"API Connection Error: {e}")
     st.stop()
 
 # ---------------------------------------------------------
