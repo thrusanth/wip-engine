@@ -3,6 +3,7 @@ import requests
 import os
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
+API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
 
 # 1. Page Configuration
 st.set_page_config(
@@ -42,7 +43,12 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         "recovered_units": recovered_units
     }
     try:
-        response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload, timeout=3)
+        response = requests.post(
+            f"{API_BASE_URL}/events/resolve",
+            json=payload,
+            headers={"X-API-Key": API_KEY},
+            timeout=3,
+        )
         if response.status_code != 200:
             st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
             st.stop()

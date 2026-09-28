@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
+from uuid import uuid4
 
 # ---------------------------------------------------------
 # Enums
@@ -18,6 +20,14 @@ class ResolutionType(str, Enum):
     ALL = "all"
     NONE = "none"
     PARTIAL = "partial"
+
+
+class ExceptionKind(str, Enum):
+    """Category of live inventory execution anomaly."""
+    PHANTOM_DRIFT = "phantom_drift"
+    CAGE_DISCREPANCY = "cage_discrepancy"
+    SKU_VARIANCE = "sku_variance"
+    UNTRACKED_BACKSTOCK = "untracked_backstock"
 
 # ---------------------------------------------------------
 # Core Domain Models
@@ -47,6 +57,18 @@ class ContainerState(BaseModel):
     skus: List[SkuState]
     is_pending: bool = False
 
+
+class ActiveException(BaseModel):
+    """A live exception surfaced by telemetry or the background simulator."""
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    kind: ExceptionKind
+    container_id: str
+    sku: str
+    zone: str
+    units: int = Field(..., ge=0)
+    message: str
+    detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ---------------------------------------------------------
 # Event Models (Input)
 # ---------------------------------------------------------
@@ -72,3 +94,4 @@ class TelemetryResponse(BaseModel):
     """The full payload returned to the frontend."""
     metrics: GlobalMetrics
     containers: Dict[str, ContainerState]
+    active_exceptions: List[ActiveException] = Field(default_factory=list)
