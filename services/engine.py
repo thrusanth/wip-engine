@@ -1,8 +1,13 @@
 import random
 import threading
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from services.sku_catalog import get_simulation_sku_pool, get_sku_profile, get_unit_price
+from services.simulation_config import (
+    FIXED_SIMULATION_RANDOM_SEED,
+    FIXTURE_EXCEPTION_DETECTED_AT,
+    LIVE_SIMULATION_ENABLED,
+)
 from models.schemas import (
     ActiveException,
     ContainerState,
@@ -19,6 +24,8 @@ from models.schemas import (
 class WipEngine:
     def __init__(self):
         self._lock = threading.RLock()
+        self._rng = random.Random(FIXED_SIMULATION_RANDOM_SEED)
+        self._live_simulation_enabled = LIVE_SIMULATION_ENABLED
         self.containers: Dict[str, ContainerState] = {}
         self.active_exceptions: List[ActiveException] = []
         self.metrics = GlobalMetrics()
@@ -142,8 +149,22 @@ class WipEngine:
             pending_edge_tasks=total_pending,
         )
 
+    def _exception_identity(
+        self, kind: ExceptionKind, container_id: str, sku: str
+    ) -> Tuple[ExceptionKind, str, str]:
+        return (kind, container_id, sku)
+
+    def _stable_exception_id(
+        self, kind: ExceptionKind, container_id: str, sku: str
+    ) -> str:
+        return f"wip-{kind.value}-{container_id}-{sku}"
+
     def _sync_active_exceptions(self):
         """Rebuild active_exceptions from unresolved container/SKU state."""
+        prior = {
+            self._exception_identity(exc.kind, exc.container_id, exc.sku): exc
+            for exc in self.active_exceptions
+        }
         exceptions: List[ActiveException] = []
 
         for container in self.containers.values():
@@ -152,14 +173,24 @@ class WipEngine:
                     continue
 
                 if sku.drift > 0:
+                    identity = self._exception_identity(
+                        ExceptionKind.PHANTOM_DRIFT, container.id, sku.sku
+                    )
+                    previous = prior.get(identity)
                     exceptions.append(
                         ActiveException(
+                            id=self._stable_exception_id(
+                                ExceptionKind.PHANTOM_DRIFT, container.id, sku.sku
+                            ),
                             kind=ExceptionKind.PHANTOM_DRIFT,
                             container_id=container.id,
                             sku=sku.sku,
                             ean=sku.ean,
                             zone=container.zone,
                             units=sku.drift,
+                            detected_at=(
+                                previous.detected_at if previous else FIXTURE_EXCEPTION_DETECTED_AT
+                            ),
                             message=(
                                 f"{sku.drift} units of {sku.sku} unaccounted on {container.id} "
                                 f"({container.status.value})."
@@ -167,14 +198,24 @@ class WipEngine:
                         )
                     )
                 elif sku.variance > 0:
+                    identity = self._exception_identity(
+                        ExceptionKind.UNTRACKED_BACKSTOCK, container.id, sku.sku
+                    )
+                    previous = prior.get(identity)
                     exceptions.append(
                         ActiveException(
+                            id=self._stable_exception_id(
+                                ExceptionKind.UNTRACKED_BACKSTOCK, container.id, sku.sku
+                            ),
                             kind=ExceptionKind.UNTRACKED_BACKSTOCK,
                             container_id=container.id,
                             sku=sku.sku,
                             ean=sku.ean,
                             zone=container.zone,
                             units=sku.variance,
+                            detected_at=(
+                                previous.detected_at if previous else FIXTURE_EXCEPTION_DETECTED_AT
+                            ),
                             message=(
                                 f"{sku.variance} units of {sku.sku} missing CV proof-of-fill; "
                                 "suspected untracked backstock routing."
@@ -182,12 +223,21 @@ class WipEngine:
                         )
                     )
 
+        # Preserve synthetic simulator alerts (cage / SKU variance) when live sim is enabled.
+        if self._live_simulation_enabled:
+            for exc in self.active_exceptions:
+                if exc.kind in (ExceptionKind.CAGE_DISCREPANCY, ExceptionKind.SKU_VARIANCE):
+                    exceptions.append(exc)
+
         self.active_exceptions = exceptions
 
     def apply_simulated_tick(self) -> None:
-        """Apply one background simulation step (thread-safe)."""
+        """Apply one optional live simulation step (thread-safe, seeded RNG)."""
+        if not self._live_simulation_enabled:
+            return
+
         with self._lock:
-            scenario = random.choice(
+            scenario = self._rng.choice(
                 [
                     "phantom_drift",
                     "cage_discrepancy",
@@ -198,7 +248,7 @@ class WipEngine:
             )
 
             if scenario == "phantom_drift":
-                drift_container_id = random.choice(["FT-02", "FT-04"])
+                drift_container_id = self._rng.choice(["FT-02", "FT-04"])
                 container = self.containers.get(drift_container_id)
                 if container and container.skus:
                     drift_skus = [
@@ -207,7 +257,7 @@ class WipEngine:
                         if not s.is_resolved and s.drift > 0 and s.worked > 0
                     ]
                     if drift_skus:
-                        sku = random.choice(drift_skus)
+                        sku = self._rng.choice(drift_skus)
                         sku.worked = max(0, sku.worked - 1)
 
             elif scenario == "cage_discrepancy":
@@ -220,7 +270,7 @@ class WipEngine:
                         sku="MIXED-MANIFEST",
                         ean=cage_profile["ean"],
                         zone="Backroom Staging",
-                        units=random.randint(1, 6),
+                        units=self._rng.randint(1, 6),
                         message="Delivery cage manifest mismatch detected during breakdown.",
                     )
                 )
@@ -236,7 +286,7 @@ class WipEngine:
                 self._pending_delivery_cages = max(2, self._pending_delivery_cages - 1)
 
             elif scenario == "sku_variance":
-                pool_sku = random.choice(list(get_simulation_sku_pool().keys()))
+                pool_sku = self._rng.choice(list(get_simulation_sku_pool().keys()))
                 if pool_sku == "MIXED-MANIFEST":
                     pool_sku = "CHOCO-BISCUITS-6PK"
                 profile = get_sku_profile(pool_sku)
@@ -247,7 +297,7 @@ class WipEngine:
                         sku=pool_sku,
                         ean=profile["ean"],
                         zone="Shop Floor",
-                        units=random.randint(1, 3),
+                        units=self._rng.randint(1, 3),
                         message=f"SKU variance detected for {profile['name']} during simulated scan.",
                     )
                 )
@@ -257,7 +307,7 @@ class WipEngine:
                 exc
                 for exc in self.active_exceptions
                 if exc.kind != ExceptionKind.CAGE_DISCREPANCY
-                or random.random() > 0.3
+                or self._rng.random() > 0.3
             ]
 
             self._recalculate_all()
