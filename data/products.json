@@ -23,6 +23,11 @@
       "ean": "5012345678948",
       "name": "Orange Soda 8pk",
       "price": 2.25
+    },
+    "TWIRL-8PK": {
+      "ean": "5012345678955",
+      "name": "Twirl 8pk",
+      "price": 2.0
     }
   }
 }

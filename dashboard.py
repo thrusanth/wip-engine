@@ -304,7 +304,7 @@ with right_col:
 st.divider()
 
 # ==========================================
-# Row 2: Orange Soda phantom drift (FT-04)
+# Row 2: FT-04 fixture (TWIRL-8PK)
 # ==========================================
 ft4_col, _spacer = st.columns([1, 2])
 with ft4_col:
@@ -341,7 +341,7 @@ with ft4_col:
                         f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
                         f"{sku_data['shrink_confirmed']} confirmed as shrink."
                     )
-            else:
+            elif sku_data["drift"] > 0:
                 st.warning(
                     f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
                     f"'{sku_data.get('name', sku_data['sku'])}' are missing and unaccounted for."
@@ -376,3 +376,8 @@ with ft4_col:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("Confirm Partial", type="primary", key="ft4_confirm_partial"):
                             submit_resolution(ft4_data["id"], sku_data["sku"], "partial", partial_qty)
+            else:
+                st.success(
+                    "✅ **Fully accounted:** Case split matches telemetry "
+                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+                )

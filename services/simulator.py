@@ -7,14 +7,34 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 5.0
 
-# Baseline phantom-drift scenario for Orange Soda (FT-04); engine seeds this on startup.
-ORANGE_SODA_PHANTOM_DRIFT_SCENARIO = {
-    "sku": "ORANGE-SODA-8PK",
+# FT-04 startup fixture; engine seeds container state from this on init.
+FT_04_SEED_SCENARIO = {
+    "sku": "TWIRL-8PK",
     "container_id": "FT-04",
     "expected": 8,
-    "worked": 6,
-    "phantom_drift": 2,
+    "worked": 4,
+    "backstock": 4,
 }
+
+
+def seed_ft_04_fixture(engine: WipEngine) -> None:
+    """Apply the FT-04 TWIRL-8PK fixture (8-case: 4 shelf / 4 backstock)."""
+    from models.schemas import ContainerState, ContainerStatus
+
+    scenario = FT_04_SEED_SCENARIO
+    engine.containers[scenario["container_id"]] = ContainerState(
+        id=scenario["container_id"],
+        status=ContainerStatus.IN_PROGRESS_SHOPFLOOR,
+        zone="Aisle 9",
+        skus=[
+            engine._sku_state(
+                scenario["sku"],
+                expected=scenario["expected"],
+                worked=scenario["worked"],
+                backstock=scenario["backstock"],
+            )
+        ],
+    )
 
 
 async def run_telemetry_simulator(

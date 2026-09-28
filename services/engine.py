@@ -78,21 +78,9 @@ class WipEngine:
             ],
         )
 
-        from services.simulator import ORANGE_SODA_PHANTOM_DRIFT_SCENARIO
+        from services.simulator import seed_ft_04_fixture
 
-        orange = ORANGE_SODA_PHANTOM_DRIFT_SCENARIO
-        self.containers["FT-04"] = ContainerState(
-            id=orange["container_id"],
-            status=ContainerStatus.IN_PROGRESS_SHOPFLOOR,
-            zone="Aisle 9",
-            skus=[
-                self._sku_state(
-                    orange["sku"],
-                    expected=orange["expected"],
-                    worked=orange["worked"],
-                )
-            ],
-        )
+        seed_ft_04_fixture(self)
 
         with self._lock:
             self._recalculate_all()
