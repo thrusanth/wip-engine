@@ -304,28 +304,34 @@ with right_col:
 st.divider()
 
 
-def render_inventory_line_card(container_data, sku_data, card_key_prefix):
-    """Render one SKU inventory line in its own bordered card."""
+def render_inventory_line_card(
+    container_data,
+    sku_data,
+    card_key_prefix,
+    card_title_prefix="Execution Telemetry",
+):
+    """Render one SKU inventory line in its own bordered card (FT-02 header hierarchy)."""
     line_key = sku_data["sku"].replace("-", "_").lower()
     prefix = f"{card_key_prefix}_{line_key}"
+    product_name = sku_data.get("name", sku_data["sku"])
 
     with st.container(border=True):
-        st.subheader(sku_data.get("name", sku_data["sku"]))
+        st.subheader(f"{card_title_prefix}: {container_data['id']}")
         st.caption(
-            f"Flattop {container_data['id']} · Zone {container_data['zone']} · "
-            f"{container_data['status']}"
+            f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}"
         )
         st.markdown(
-            f"**SKU:** `{sku_data['sku']}`  \n"
+            f"**SKU Profile:** {product_name}  \n"
+            f"`{sku_data['sku']}`  \n"
             f"**EAN:** `{sku_data.get('ean', '')}`"
         )
 
         metrics_left, metrics_right = st.columns(2)
         with metrics_left:
-            st.metric("Expected Quantity (Case)", sku_data["expected"])
+            st.metric("Expected Quantity", sku_data["expected"])
             st.metric("Sent to Backstock", sku_data.get("backstock", 0))
         with metrics_right:
-            st.metric("Worked to Shelf / Filled", sku_data["worked"])
+            st.metric("Worked to Shelf", sku_data["worked"])
             st.metric("Phantom Drift", sku_data["drift"])
 
         st.markdown("---")
