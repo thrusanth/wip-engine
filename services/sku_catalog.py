@@ -26,6 +26,10 @@ SIMULATION_SKU_POOL: Dict[str, SkuCatalogEntry] = {
         "ean": "5012345000012",
         "name": "Mixed Delivery Cage Manifest",
     },
+    "ORANGE-SODA-8PK": {
+        "ean": "5012345678948",
+        "name": "Orange Soda 8pk",
+    },
 }
 
 

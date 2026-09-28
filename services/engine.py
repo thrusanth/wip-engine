@@ -22,6 +22,7 @@ class WipEngine:
             "CHOCO-BISCUITS-6PK": 1.50,
             "BAKED-BEANS-6PK": 1.10,
             "PERONI-12PK": 15.00,
+            "ORANGE-SODA-8PK": 2.25,
         }
 
         self._lock = threading.RLock()
@@ -78,6 +79,22 @@ class WipEngine:
                     expected=12,
                     cv_filled=7,
                     confirmed_backstock=5,
+                )
+            ],
+        )
+
+        from services.simulator import ORANGE_SODA_PHANTOM_DRIFT_SCENARIO
+
+        orange = ORANGE_SODA_PHANTOM_DRIFT_SCENARIO
+        self.containers["FT-04"] = ContainerState(
+            id=orange["container_id"],
+            status=ContainerStatus.IN_PROGRESS_SHOPFLOOR,
+            zone="Aisle 9",
+            skus=[
+                self._sku_state(
+                    orange["sku"],
+                    expected=orange["expected"],
+                    worked=orange["worked"],
                 )
             ],
         )
@@ -198,7 +215,8 @@ class WipEngine:
             )
 
             if scenario == "phantom_drift":
-                container = self.containers.get("FT-02")
+                drift_container_id = random.choice(["FT-02", "FT-04"])
+                container = self.containers.get(drift_container_id)
                 if container and container.skus:
                     sku = container.skus[0]
                     if not sku.is_resolved and sku.worked > 0:
