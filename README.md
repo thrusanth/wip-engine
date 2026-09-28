@@ -24,20 +24,25 @@ This repository has been comprehensively refactored into a decoupled, event-driv
 
 ## Running Locally
 
-To run the decoupled architecture locally, you will need to start both the backend API and the frontend dashboard in separate terminal instances.
+1. Setup the Environment
+Clone the repository and install the dependencies inside a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-### 1. Start the FastAPI Backend
-Ensure your virtual environment is active and dependencies are installed, then run the FastAPI server:
-
+2. Start the State Engine (Backend)
+Keep the virtual environment activated and run the FastAPI server:
 ```bash
 python3 -m fastapi dev main.py
 ```
-*(The API will be available at `http://localhost:8000`. You can view the Swagger UI documentation at `http://localhost:8000/docs`)*
+*(Runs on http://localhost:8000)*
 
-### 2. Start the Streamlit Frontend
-In a new terminal window, start the Streamlit client:
-
+3. Start the Frontline Client (Frontend)
+Open a second terminal, activate the environment again, and launch Streamlit:
 ```bash
+source venv/bin/activate
 python3 -m streamlit run dashboard.py
 ```
-*(The dashboard will automatically open in your browser, connecting to the local API backend).*
+*(Runs on http://localhost:8501)*
