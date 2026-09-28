@@ -58,9 +58,6 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
 try:
     telemetry_data = fetch_telemetry()
     
-    st.write("### Debug: Raw Backend Telemetry")
-    st.json(telemetry_data)
-    
     if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
         metrics = telemetry_data["metrics"]
         containers = telemetry_data.get("containers", {})
