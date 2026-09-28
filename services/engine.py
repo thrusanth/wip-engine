@@ -2,7 +2,7 @@ import random
 import threading
 from typing import Dict, List
 
-from services.sku_catalog import SIMULATION_SKU_POOL, get_sku_profile, get_unit_price
+from services.sku_catalog import get_simulation_sku_pool, get_sku_profile, get_unit_price
 from models.schemas import (
     ActiveException,
     ContainerState,
@@ -243,7 +243,7 @@ class WipEngine:
                 self._pending_delivery_cages = max(2, self._pending_delivery_cages - 1)
 
             elif scenario == "sku_variance":
-                pool_sku = random.choice(list(SIMULATION_SKU_POOL.keys()))
+                pool_sku = random.choice(list(get_simulation_sku_pool().keys()))
                 if pool_sku == "MIXED-MANIFEST":
                     pool_sku = "CHOCO-BISCUITS-6PK"
                 profile = get_sku_profile(pool_sku)

@@ -1,14 +1,11 @@
 import asyncio
 import logging
 from services.engine import WipEngine
-from services.sku_catalog import SIMULATION_SKU_POOL
+from services.sku_catalog import get_simulation_sku_pool
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 5.0
-
-# Background simulation item pool (SKU -> 13-digit EAN + display name).
-SIMULATION_ITEM_POOL = SIMULATION_SKU_POOL
 
 # Baseline phantom-drift scenario for Orange Soda (FT-04); engine seeds this on startup.
 ORANGE_SODA_PHANTOM_DRIFT_SCENARIO = {
@@ -29,6 +26,7 @@ async def run_telemetry_simulator(
     try:
         while True:
             await asyncio.sleep(interval_seconds)
+            get_simulation_sku_pool()
             engine.apply_simulated_tick()
     except asyncio.CancelledError:
         logger.info("Telemetry simulator shutting down")
