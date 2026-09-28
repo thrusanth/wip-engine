@@ -304,80 +304,101 @@ with right_col:
 st.divider()
 
 # ==========================================
-# Row 2: FT-04 fixture (TWIRL-8PK)
+# Row 2: FT-04 multi-SKU fixture
 # ==========================================
 ft4_col, _spacer = st.columns([1, 2])
 with ft4_col:
     with st.container(border=True):
         ft4_data = containers.get("FT-04")
         if ft4_data:
-            sku_data = ft4_data["skus"][0]
             st.subheader(f"Execution Telemetry: {ft4_data['id']}")
-            st.caption(f"Last Known State: {ft4_data['status']} | Zone: {ft4_data['zone']}")
-
-            st.markdown(
-                f"**SKU Profile:** `{sku_data['sku']}`  \n"
-                f"**Name:** {sku_data.get('name', sku_data['sku'])}  \n"
-                f"**EAN:** `{sku_data.get('ean', '')}`"
+            st.caption(
+                f"Last Known State: {ft4_data['status']} | Zone: {ft4_data['zone']} | "
+                f"{len(ft4_data.get('skus', []))} inventory lines"
             )
 
-            metrics_ft4_a, metrics_ft4_b = st.columns(2)
-            with metrics_ft4_a:
-                st.metric("Expected Quantity (Case)", sku_data["expected"])
-                st.metric("Sent to Backstock", sku_data.get("backstock", 0))
-            with metrics_ft4_b:
-                st.metric("Worked to Shelf / Filled", sku_data["worked"])
-                st.metric("Phantom Drift", sku_data["drift"])
+            for line_index, sku_data in enumerate(ft4_data.get("skus", [])):
+                line_key = sku_data["sku"].replace("-", "_").lower()
+                st.markdown(
+                    f"#### {sku_data.get('name', sku_data['sku'])}  \n"
+                    f"`{sku_data['sku']}` · EAN `{sku_data.get('ean', '')}`"
+                )
 
-            st.markdown("---")
-
-            if sku_data["is_resolved"]:
-                if sku_data["resolution_type"] == "all":
-                    st.success("✅ **Resolved:** All units recovered and accounted for.")
-                elif sku_data["resolution_type"] == "none":
-                    st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
-                elif sku_data["resolution_type"] == "partial":
-                    st.warning(
-                        f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
-                        f"{sku_data['shrink_confirmed']} confirmed as shrink."
+                metrics_ft4_a, metrics_ft4_b = st.columns(2)
+                with metrics_ft4_a:
+                    st.metric("Expected Quantity (Case)", sku_data["expected"], key=f"ft4_exp_{line_key}")
+                    st.metric("Sent to Backstock", sku_data.get("backstock", 0), key=f"ft4_bs_{line_key}")
+                with metrics_ft4_b:
+                    st.metric(
+                        "Worked to Shelf / Filled",
+                        sku_data["worked"],
+                        key=f"ft4_wrk_{line_key}",
                     )
-            elif sku_data["drift"] > 0:
-                st.warning(
-                    f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-                    f"'{sku_data.get('name', sku_data['sku'])}' are missing and unaccounted for."
-                )
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_ft4_1, col_ft4_2, col_ft4_3 = st.columns(3)
-                with col_ft4_1:
-                    if st.button(f"All Found ({sku_data['drift']})", key="ft4_all"):
-                        submit_resolution(ft4_data["id"], sku_data["sku"], "all", sku_data["drift"])
-                with col_ft4_2:
-                    if st.button("Not Present (0)", key="ft4_none"):
-                        submit_resolution(ft4_data["id"], sku_data["sku"], "none", 0)
-                with col_ft4_3:
-                    if "ft4_show_partial" not in st.session_state:
-                        st.session_state.ft4_show_partial = False
-                    if st.button("Partial Found...", key="ft4_partial"):
-                        st.session_state.ft4_show_partial = not st.session_state.ft4_show_partial
+                    st.metric("Phantom Drift", sku_data["drift"], key=f"ft4_drf_{line_key}")
 
-                if st.session_state.get("ft4_show_partial", False):
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    partial_col1, partial_col2 = st.columns([2, 1])
-                    with partial_col1:
-                        max_partial = max(1, sku_data["drift"] - 1)
-                        partial_qty = st.number_input(
-                            "Quantity Recovered?",
-                            min_value=1,
-                            max_value=max_partial,
-                            value=1,
-                            key="ft4_partial_qty",
+                if sku_data["is_resolved"]:
+                    if sku_data["resolution_type"] == "all":
+                        st.success("✅ **Resolved:** All units recovered and accounted for.")
+                    elif sku_data["resolution_type"] == "none":
+                        st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
+                    elif sku_data["resolution_type"] == "partial":
+                        st.warning(
+                            f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
+                            f"{sku_data['shrink_confirmed']} confirmed as shrink."
                         )
-                    with partial_col2:
+                elif sku_data["drift"] > 0:
+                    st.warning(
+                        f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
+                        f"'{sku_data.get('name', sku_data['sku'])}' are missing and unaccounted for."
+                    )
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col_ft4_1, col_ft4_2, col_ft4_3 = st.columns(3)
+                    with col_ft4_1:
+                        if st.button(
+                            f"All Found ({sku_data['drift']})",
+                            key=f"ft4_all_{line_key}",
+                        ):
+                            submit_resolution(ft4_data["id"], sku_data["sku"], "all", sku_data["drift"])
+                    with col_ft4_2:
+                        if st.button("Not Present (0)", key=f"ft4_none_{line_key}"):
+                            submit_resolution(ft4_data["id"], sku_data["sku"], "none", 0)
+                    with col_ft4_3:
+                        partial_flag = f"ft4_show_partial_{line_key}"
+                        if partial_flag not in st.session_state:
+                            st.session_state[partial_flag] = False
+                        if st.button("Partial Found...", key=f"ft4_partial_{line_key}"):
+                            st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+                    if st.session_state.get(partial_flag, False):
                         st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("Confirm Partial", type="primary", key="ft4_confirm_partial"):
-                            submit_resolution(ft4_data["id"], sku_data["sku"], "partial", partial_qty)
-            else:
-                st.success(
-                    "✅ **Fully accounted:** Case split matches telemetry "
-                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
-                )
+                        partial_col1, partial_col2 = st.columns([2, 1])
+                        with partial_col1:
+                            max_partial = max(1, sku_data["drift"] - 1)
+                            partial_qty = st.number_input(
+                                "Quantity Recovered?",
+                                min_value=1,
+                                max_value=max_partial,
+                                value=1,
+                                key=f"ft4_partial_qty_{line_key}",
+                            )
+                        with partial_col2:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button(
+                                "Confirm Partial",
+                                type="primary",
+                                key=f"ft4_confirm_partial_{line_key}",
+                            ):
+                                submit_resolution(
+                                    ft4_data["id"],
+                                    sku_data["sku"],
+                                    "partial",
+                                    partial_qty,
+                                )
+                else:
+                    st.success(
+                        "✅ **Fully accounted:** Case split matches telemetry "
+                        f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+                    )
+
+                if line_index < len(ft4_data["skus"]) - 1:
+                    st.markdown("---")

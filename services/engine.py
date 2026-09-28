@@ -201,8 +201,13 @@ class WipEngine:
                 drift_container_id = random.choice(["FT-02", "FT-04"])
                 container = self.containers.get(drift_container_id)
                 if container and container.skus:
-                    sku = container.skus[0]
-                    if not sku.is_resolved and sku.worked > 0:
+                    drift_skus = [
+                        s
+                        for s in container.skus
+                        if not s.is_resolved and s.drift > 0 and s.worked > 0
+                    ]
+                    if drift_skus:
+                        sku = random.choice(drift_skus)
                         sku.worked = max(0, sku.worked - 1)
 
             elif scenario == "cage_discrepancy":
