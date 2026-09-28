@@ -9,6 +9,8 @@ services:
     build: .
     ports:
       - "8501:8501"
+    environment:
+      - API_BASE_URL=http://backend:8000/api/v1
     command: streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
       - backend

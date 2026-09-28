@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
+import os
 
-API_BASE_URL = "http://backend:8000/api/v1"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
 
 # 1. Page Configuration
 st.set_page_config(
