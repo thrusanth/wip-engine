@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from middleware.trx_id import TRX_ID_HEADER, TrxIdMiddleware
 from routers import events, telemetry
 from services.engine import engine
 from services.simulator import spawn_simulator_task
@@ -30,7 +31,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[TRX_ID_HEADER],
 )
+app.add_middleware(TrxIdMiddleware)
 
 app.include_router(telemetry.router)
 app.include_router(events.router)
