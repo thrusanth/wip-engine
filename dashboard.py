@@ -326,15 +326,11 @@ with ft4_col:
 
                 metrics_ft4_a, metrics_ft4_b = st.columns(2)
                 with metrics_ft4_a:
-                    st.metric("Expected Quantity (Case)", sku_data["expected"], key=f"ft4_exp_{line_key}")
-                    st.metric("Sent to Backstock", sku_data.get("backstock", 0), key=f"ft4_bs_{line_key}")
+                    st.metric("Expected Quantity (Case)", sku_data["expected"])
+                    st.metric("Sent to Backstock", sku_data.get("backstock", 0))
                 with metrics_ft4_b:
-                    st.metric(
-                        "Worked to Shelf / Filled",
-                        sku_data["worked"],
-                        key=f"ft4_wrk_{line_key}",
-                    )
-                    st.metric("Phantom Drift", sku_data["drift"], key=f"ft4_drf_{line_key}")
+                    st.metric("Worked to Shelf / Filled", sku_data["worked"])
+                    st.metric("Phantom Drift", sku_data["drift"])
 
                 if sku_data["is_resolved"]:
                     if sku_data["resolution_type"] == "all":
