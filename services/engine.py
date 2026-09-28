@@ -2,7 +2,7 @@ import random
 import threading
 from typing import Dict, List
 
-from services.sku_catalog import SIMULATION_SKU_POOL, get_sku_profile
+from services.sku_catalog import SIMULATION_SKU_POOL, get_sku_profile, get_unit_price
 from models.schemas import (
     ActiveException,
     ContainerState,
@@ -18,13 +18,6 @@ from models.schemas import (
 
 class WipEngine:
     def __init__(self):
-        self.sku_prices = {
-            "CHOCO-BISCUITS-6PK": 1.50,
-            "BAKED-BEANS-6PK": 1.10,
-            "PERONI-12PK": 15.00,
-            "ORANGE-SODA-8PK": 2.25,
-        }
-
         self._lock = threading.RLock()
         self.containers: Dict[str, ContainerState] = {}
         self.active_exceptions: List[ActiveException] = []
@@ -34,10 +27,12 @@ class WipEngine:
 
     def _sku_state(self, sku_code: str, **fields) -> SkuState:
         profile = get_sku_profile(sku_code)
+        price = fields.pop("price", profile.get("price"))
         return SkuState(
             sku=sku_code,
             name=profile["name"],
             ean=profile["ean"],
+            price=price,
             **fields,
         )
 
@@ -141,8 +136,8 @@ class WipEngine:
                 self._recalculate_sku(sku)
                 total_drift += sku.drift
 
-                price = self.sku_prices.get(sku.sku, 0.0)
-                total_shrink_cost += sku.drift * price
+                unit_price = get_unit_price(sku.sku, sku.price)
+                total_shrink_cost += sku.drift * unit_price
 
                 if sku.variance > 0 and not sku.is_resolved:
                     container_pending = True

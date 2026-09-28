@@ -48,7 +48,8 @@ class SkuState(BaseModel):
     backstock: int = 0
     confirmed_backstock: int = 0
     cv_filled: int = 0
-    
+    price: Optional[float] = None
+
     # Computed fields (these will be enriched by the engine before returning)
     drift: int = 0
     variance: int = 0
