@@ -22,7 +22,9 @@ def fetch_telemetry():
     """Fetches the latest state from the FastAPI backend."""
     try:
         response = requests.get(f"{API_BASE_URL}/telemetry")
-        response.raise_for_status()
+        if response.status_code != 200:
+            st.error(f"Backend returned Error {response.status_code}: {response.text}")
+            st.stop()
         return response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to connect to backend API: {e}")
@@ -38,14 +40,14 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
     }
     try:
         response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload)
-        response.raise_for_status()
+        if response.status_code != 200:
+            st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
+            return
         st.rerun()
     except requests.exceptions.RequestException as e:
-        st.error(f"Failed to submit resolution: {e}")
+        st.error(f"Failed to submit resolution due to connection error: {e}")
 
 # Fetch data on load
-metrics = {}
-containers = {}
 try:
     telemetry_data = fetch_telemetry()
     if telemetry_data:
