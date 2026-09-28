@@ -4,16 +4,19 @@
 
 The **WIP Exception Engine** is a production-grade, event-driven telemetry system designed to track execution delivery workloads and proactively isolate "Phantom Drift" (inventory missing between delivery cages, backroom staging, and the shop floor). By analyzing physical replenishment events against manifest data, this engine flags stock discrepancies in real-time, empowering retail shift leaders to take immediate resolution actions before shrinkage occurs.
 
-## Architecture
+## Tech Stack
 
-This repository has been comprehensively refactored into a decoupled, event-driven architecture:
+This repository utilizes a decoupled, dockerized architecture for seamless local development and production deployment:
 
-1. **Backend State Engine (FastAPI & Pydantic):** 
-   - A robust HTTP API powered by FastAPI that maintains the system state via a dedicated telemetry engine (`services/engine.py`).
-   - Domain rules, mathematical variance calculations, and financial shrink tracking are strictly modeled using Pydantic schemas.
-2. **Frontend Client (Streamlit):**
-   - A stateless frontend dashboard (`dashboard.py`) that acts purely as a UI client.
-   - It fetches real-time telemetry from the backend and triggers resolution events via API POST requests, cleanly decoupling the visual layer from the business logic.
+- **Backend:** FastAPI & Uvicorn (Robust, high-performance API server with strict Pydantic data validation).
+- **Frontend:** Streamlit (Stateless, reactive UI client for real-time dashboarding).
+- **Orchestration:** Docker & Docker Compose (Containerized multi-service deployment).
+
+## Architecture & Networking
+
+The system state is maintained entirely within the backend API engine (`services/engine.py`). The Streamlit dashboard acts purely as a dumb frontend client, fetching telemetry and triggering resolution events via HTTP POST requests. 
+
+The two containers are orchestrated via `docker-compose.yml` on a custom bridge network (`wip-engine-net`). The frontend routes its API requests directly through the host gateway interface to reliably resolve and communicate with the backend service.
 
 ## Core Features
 
@@ -22,27 +25,21 @@ This repository has been comprehensively refactored into a decoupled, event-driv
 - **Financial Shrink Tracking:** Dynamically calculate the monetary impact of unresolved phantom drift in real-time based on specific SKU values.
 - **3-Way Interactive Resolution:** Shift leaders can address edge tasks directly from the dashboard by confirming stock as "All Found" (backstock), "Not Present" (confirming shrink), or "Partial Found" (split resolution).
 
-## Running Locally
+## Getting Started
 
-1. Setup the Environment
-Clone the repository and install the dependencies inside a virtual environment:
+To run the full decoupled architecture locally using Docker Compose:
+
+### 1. Start the Stack
+
+Clone the repository and spin up the containers in detached mode:
+
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+sudo docker-compose up --build -d
 ```
 
-2. Start the State Engine (Backend)
-Keep the virtual environment activated and run the FastAPI server:
-```bash
-python3 -m fastapi dev main.py
-```
-*(Runs on http://localhost:8000)*
+### 2. Access the Application
 
-3. Start the Frontline Client (Frontend)
-Open a second terminal, activate the environment again, and launch Streamlit:
-```bash
-source venv/bin/activate
-python3 -m streamlit run dashboard.py
-```
-*(Runs on http://localhost:8501)*
+Once the containers are built and running, you can access the services in your browser:
+
+- **Streamlit Dashboard (Frontend):** [http://localhost:8501](http://localhost:8501)
+- **FastAPI Interactive Docs (Backend):** [http://localhost:8000/docs](http://localhost:8000/docs)
