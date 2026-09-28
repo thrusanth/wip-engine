@@ -21,11 +21,14 @@ st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Det
 def fetch_telemetry():
     """Fetches the latest state from the FastAPI backend."""
     try:
-        response = requests.get(f"{API_BASE_URL}/telemetry")
+        response = requests.get(f"{API_BASE_URL}/telemetry", timeout=3)
         if response.status_code != 200:
             st.error(f"Backend returned Error {response.status_code}: {response.text}")
             st.stop()
         return response.json()
+    except requests.exceptions.Timeout:
+        st.warning("Backend API timed out while fetching telemetry. Please check if the server is running and responsive.")
+        st.stop()
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to connect to backend API: {e}")
         st.stop()
@@ -39,22 +42,38 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         "recovered_units": recovered_units
     }
     try:
-        response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload)
+        response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload, timeout=3)
         if response.status_code != 200:
             st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
             st.stop()
         st.rerun()
+    except requests.exceptions.Timeout:
+        st.warning(f"Backend API timed out while submitting resolution for container {container_id}.")
+        st.stop()
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to submit resolution due to connection error: {e}")
+        st.stop()
 
 # Fetch data on load
 try:
     telemetry_data = fetch_telemetry()
+    
     st.write("### Debug: Raw Backend Telemetry")
     st.json(telemetry_data)
     
-    metrics = telemetry_data["metrics"]
-    containers = telemetry_data["containers"]
+    if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
+        metrics = telemetry_data["metrics"]
+        containers = telemetry_data.get("containers", {})
+    else:
+        st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
+        metrics = {
+            "pending_delivery_cages": 0,
+            "active_flattops": 0,
+            "detected_phantom_drift": 0,
+            "daily_shrink_cost": 0.0,
+            "pending_edge_tasks": 0
+        }
+        containers = {}
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
