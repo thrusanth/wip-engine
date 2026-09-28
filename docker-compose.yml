@@ -1,10 +1,18 @@
 version: '3.8'
+
+networks:
+  wip-engine-net:
+    driver: bridge
+
 services:
   backend:
     build: .
     ports:
       - "8000:8000"
     command: uvicorn main:app --host 0.0.0.0 --port 8000
+    networks:
+      - wip-engine-net
+
   frontend:
     build: .
     ports:
@@ -14,3 +22,5 @@ services:
     command: streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
       - backend
+    networks:
+      - wip-engine-net
