@@ -1,10 +1,14 @@
 import asyncio
 import logging
 from services.engine import WipEngine
+from services.sku_catalog import SIMULATION_SKU_POOL
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 5.0
+
+# Background simulation item pool (SKU -> 13-digit EAN + display name).
+SIMULATION_ITEM_POOL = SIMULATION_SKU_POOL
 
 
 async def run_telemetry_simulator(

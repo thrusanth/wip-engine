@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from uuid import uuid4
 
 # ---------------------------------------------------------
@@ -32,9 +32,17 @@ class ExceptionKind(str, Enum):
 # ---------------------------------------------------------
 # Core Domain Models
 # ---------------------------------------------------------
+def _validate_ean13(value: str) -> str:
+    if len(value) != 13 or not value.isdigit():
+        raise ValueError("EAN must be a 13-digit numeric barcode")
+    return value
+
+
 class SkuState(BaseModel):
     """The state of a specific SKU within a container."""
     sku: str
+    name: str = ""
+    ean: str = ""
     expected: int
     worked: int = 0
     backstock: int = 0
@@ -48,6 +56,14 @@ class SkuState(BaseModel):
     resolution_type: Optional[ResolutionType] = None
     recovered_units: int = 0
     shrink_confirmed: int = 0
+
+    @field_validator("ean")
+    @classmethod
+    def validate_ean(cls, value: str) -> str:
+        if not value:
+            return value
+        return _validate_ean13(value)
+
 
 class ContainerState(BaseModel):
     """The overall state of a physical container on the shop floor."""
@@ -64,10 +80,19 @@ class ActiveException(BaseModel):
     kind: ExceptionKind
     container_id: str
     sku: str
+    ean: str = ""
     zone: str
     units: int = Field(..., ge=0)
     message: str
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("ean")
+    @classmethod
+    def validate_ean(cls, value: str) -> str:
+        if not value:
+            return value
+        return _validate_ean13(value)
+
 
 # ---------------------------------------------------------
 # Event Models (Input)

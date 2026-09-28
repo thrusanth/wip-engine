@@ -2,6 +2,7 @@ import random
 import threading
 from typing import Dict, List
 
+from services.sku_catalog import SIMULATION_SKU_POOL, get_sku_profile
 from models.schemas import (
     ActiveException,
     ContainerState,
@@ -30,14 +31,23 @@ class WipEngine:
         self._pending_delivery_cages = 4
         self._initialize_mock_data()
 
+    def _sku_state(self, sku_code: str, **fields) -> SkuState:
+        profile = get_sku_profile(sku_code)
+        return SkuState(
+            sku=sku_code,
+            name=profile["name"],
+            ean=profile["ean"],
+            **fields,
+        )
+
     def _initialize_mock_data(self):
         self.containers["FT-02"] = ContainerState(
             id="FT-02",
             status=ContainerStatus.ABANDONED_MID_SHIFT,
             zone="Aisle 4",
             skus=[
-                SkuState(
-                    sku="BAKED-BEANS-6PK",
+                self._sku_state(
+                    "BAKED-BEANS-6PK",
                     expected=12,
                     worked=6,
                     backstock=2,
@@ -50,8 +60,8 @@ class WipEngine:
             status=ContainerStatus.IN_PROGRESS_SHOPFLOOR,
             zone="Aisle 2",
             skus=[
-                SkuState(
-                    sku="CHOCO-BISCUITS-6PK",
+                self._sku_state(
+                    "CHOCO-BISCUITS-6PK",
                     expected=12,
                     cv_filled=6,
                 )
@@ -63,8 +73,8 @@ class WipEngine:
             status=ContainerStatus.RETURNED_MIXED,
             zone="Aisle 7",
             skus=[
-                SkuState(
-                    sku="PERONI-12PK",
+                self._sku_state(
+                    "PERONI-12PK",
                     expected=12,
                     cv_filled=7,
                     confirmed_backstock=5,
@@ -147,6 +157,7 @@ class WipEngine:
                             kind=ExceptionKind.PHANTOM_DRIFT,
                             container_id=container.id,
                             sku=sku.sku,
+                            ean=sku.ean,
                             zone=container.zone,
                             units=sku.drift,
                             message=(
@@ -161,6 +172,7 @@ class WipEngine:
                             kind=ExceptionKind.UNTRACKED_BACKSTOCK,
                             container_id=container.id,
                             sku=sku.sku,
+                            ean=sku.ean,
                             zone=container.zone,
                             units=sku.variance,
                             message=(
@@ -181,6 +193,7 @@ class WipEngine:
                     "cage_discrepancy",
                     "cv_fill",
                     "delivery_cage_arrival",
+                    "sku_variance",
                 ]
             )
 
@@ -193,11 +206,13 @@ class WipEngine:
 
             elif scenario == "cage_discrepancy":
                 self._pending_delivery_cages = min(8, self._pending_delivery_cages + 1)
+                cage_profile = get_sku_profile("MIXED-MANIFEST")
                 self.active_exceptions.append(
                     ActiveException(
                         kind=ExceptionKind.CAGE_DISCREPANCY,
                         container_id="CAGE-UNLOAD",
                         sku="MIXED-MANIFEST",
+                        ean=cage_profile["ean"],
                         zone="Backroom Staging",
                         units=random.randint(1, 6),
                         message="Delivery cage manifest mismatch detected during breakdown.",
@@ -213,6 +228,23 @@ class WipEngine:
 
             elif scenario == "delivery_cage_arrival":
                 self._pending_delivery_cages = max(2, self._pending_delivery_cages - 1)
+
+            elif scenario == "sku_variance":
+                pool_sku = random.choice(list(SIMULATION_SKU_POOL.keys()))
+                if pool_sku == "MIXED-MANIFEST":
+                    pool_sku = "CHOCO-BISCUITS-6PK"
+                profile = get_sku_profile(pool_sku)
+                self.active_exceptions.append(
+                    ActiveException(
+                        kind=ExceptionKind.SKU_VARIANCE,
+                        container_id="FT-SIM",
+                        sku=pool_sku,
+                        ean=profile["ean"],
+                        zone="Shop Floor",
+                        units=random.randint(1, 3),
+                        message=f"SKU variance detected for {profile['name']} during simulated scan.",
+                    )
+                )
 
             # Trim stale simulated cage alerts so the feed stays readable.
             self.active_exceptions = [
