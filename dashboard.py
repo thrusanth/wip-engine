@@ -96,7 +96,53 @@ with col5:
     else:
         st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
-# Visual Divider
+active_exceptions = telemetry_data.get("active_exceptions", []) if telemetry_data else []
+
+telemetry_rows = []
+for container_id, container in containers.items():
+    zone = container.get("zone", "")
+    for sku in container.get("skus", []):
+        drift_units = sku.get("drift", 0)
+        if drift_units == 0:
+            drift_units = sku.get("variance", 0)
+        telemetry_rows.append(
+            {
+                "SKU": sku.get("sku", ""),
+                "Name": sku.get("name") or sku.get("sku", ""),
+                "EAN": sku.get("ean", ""),
+                "Location": f"{container_id} / {zone}",
+                "Drift": drift_units,
+            }
+        )
+
+exception_rows = []
+for exc in active_exceptions:
+    exception_rows.append(
+        {
+            "SKU": exc.get("sku", ""),
+            "Name": exc.get("sku", "").replace("-", " "),
+            "EAN": exc.get("ean", ""),
+            "Location": f"{exc.get('container_id', '')} / {exc.get('zone', '')}",
+            "Drift": exc.get("units", 0),
+        }
+    )
+
+tab1, tab2 = st.tabs(["System Overview", "Telemetry & Exceptions"])
+
+with tab1:
+    st.markdown(
+        "High-level operational charts and trend summaries will appear here. "
+        "Use the flattop execution cards below for live reconciliation workflows."
+    )
+
+with tab2:
+    st.subheader("Live Execution Telemetry")
+    st.dataframe(telemetry_rows, use_container_width=True, hide_index=True)
+
+    if exception_rows:
+        st.subheader("Active Telemetry Exceptions")
+        st.dataframe(exception_rows, use_container_width=True, hide_index=True)
+
 st.divider()
 
 # ---------------------------------------------------------
