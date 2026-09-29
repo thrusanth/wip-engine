@@ -1,14 +1,57 @@
-import streamlit as st
-import requests
 import os
 
+import pandas as pd
+import requests
+import streamlit as st
+
 API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
+API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
 
 # 1. Page Configuration
 st.set_page_config(
     page_title="WIP Exception Engine: Inventory Reconciliation",
     layout="wide",
     initial_sidebar_state="expanded"
+)
+
+st.markdown(
+    """
+<style>
+/* Target Column 1 (All Found - Green) */
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(1) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(1) button:hover {
+    background-color: #157347 !important;
+    border-color: #146c43 !important;
+}
+
+/* Target Column 2 (Not Present - Red) */
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(2) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(2) button:hover {
+    background-color: #bb2d3b !important;
+    border-color: #b02a37 !important;
+}
+
+/* Target Column 3 (Partial - Blue) */
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(3) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"]:has(button) > div:nth-child(3) button:hover {
+    background-color: #0b5ed7 !important;
+    border-color: #0a58ca !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # Main Title
@@ -42,7 +85,12 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         "recovered_units": recovered_units
     }
     try:
-        response = requests.post(f"{API_BASE_URL}/events/resolve", json=payload, timeout=3)
+        response = requests.post(
+            f"{API_BASE_URL}/events/resolve",
+            json=payload,
+            headers={"X-API-Key": API_KEY},
+            timeout=3,
+        )
         if response.status_code != 200:
             st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
             st.stop()
@@ -93,154 +141,227 @@ with col5:
     else:
         st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
-# Visual Divider
+telemetry_rows = []
+for container_id, container in containers.items():
+    zone = container.get("zone", "")
+    for sku in container.get("skus", []):
+        drift_units = sku.get("drift", 0)
+        if drift_units == 0:
+            drift_units = sku.get("variance", 0)
+        telemetry_rows.append(
+            {
+                "SKU": sku.get("sku", ""),
+                "Name": sku.get("name") or sku.get("sku", ""),
+                "EAN": sku.get("ean", ""),
+                "Location": f"{container_id} / {zone}",
+                "Drift": drift_units,
+            }
+        )
+
+tab1, tab2 = st.tabs(["System Overview", "Telemetry & Exceptions"])
+
+with tab1:
+    st.markdown(
+        "High-level operational charts and trend summaries will appear here. "
+        "Use the flattop execution cards below for live reconciliation workflows."
+    )
+
+with tab2:
+    st.subheader("Live Execution Telemetry")
+    telemetry_df = pd.DataFrame(telemetry_rows)
+    telemetry_df = telemetry_df[telemetry_df["Drift"] != 0].sort_values(
+        "Drift", ascending=False
+    )
+    st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
+
 st.divider()
 
 # ---------------------------------------------------------
 # Main Content Sections
 # ---------------------------------------------------------
-left_col, middle_col, right_col = st.columns(3)
+def _unaccounted_variance_value(sku_data: dict) -> int:
+    if sku_data.get("is_resolved"):
+        return 0
+    return int(sku_data.get("variance", 0))
 
-# ==========================================
-# LEFT COLUMN: Scenario 1 - The Chaotic Frontline (FT-02)
-# ==========================================
-with left_col:
-    with st.container(border=True):
-        ft2_data = containers.get("FT-02")
-        if ft2_data:
-            sku_data = ft2_data["skus"][0]
-            st.subheader(f"Execution Telemetry: {ft2_data['id']}")
-            st.caption(f"Last Known State: {ft2_data['status']} | Zone: {ft2_data['zone']}")
-            
-            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
-            
-            # Internal columns for clean metric display
-            metrics_c1, metrics_c2 = st.columns(2)
-            
-            with metrics_c1:
-                st.metric("Expected Quantity", sku_data["expected"])
-                st.metric("Sent to Backstock", sku_data["backstock"])
-                
-            with metrics_c2:
-                st.metric("Worked to Shelf", sku_data["worked"])
-                st.metric("Phantom Drift", sku_data["drift"])
-                
-            st.markdown("---")
-            
-            if sku_data["is_resolved"]:
-                if sku_data["resolution_type"] == "all":
-                    st.success("✅ **Resolved:** All 4 units recovered and accounted for.")
-                elif sku_data["resolution_type"] == "none":
-                    st.error("🚨 **Shrink Confirmed:** 4 units officially lost/unaccounted.")
-                elif sku_data["resolution_type"] == "partial":
-                    st.warning(f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, {sku_data['shrink_confirmed']} confirmed as shrink.")
-            else:
-                # Warning block for the phantom drift
-                st.warning(f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of '{sku_data['sku']}' are missing and completely unaccounted for in system telemetry.")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # Interactive Resolution Buttons for FT-02
-                col_ft2_1, col_ft2_2, col_ft2_3 = st.columns(3)
-                with col_ft2_1:
-                    if st.button(f"All Found ({sku_data['drift']})", key="ft2_all"):
-                        submit_resolution(ft2_data["id"], sku_data["sku"], "all", sku_data["drift"])
-                with col_ft2_2:
-                    if st.button(f"Not Present (0)", key="ft2_none"):
-                        submit_resolution(ft2_data["id"], sku_data["sku"], "none", 0)
-                with col_ft2_3:
-                    # Toggle for partial input
-                    if 'ft2_show_partial' not in st.session_state:
-                        st.session_state.ft2_show_partial = False
-                        
-                    if st.button("Partial Found...", key="ft2_partial"):
-                        st.session_state.ft2_show_partial = not st.session_state.ft2_show_partial
-                        
-                if st.session_state.get('ft2_show_partial', False):
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    partial_col1, partial_col2 = st.columns([2, 1])
-                    with partial_col1:
-                        partial_qty = st.number_input("Quantity Recovered?", min_value=1, max_value=sku_data['drift']-1, value=1)
-                    with partial_col2:
-                        st.markdown("<br>", unsafe_allow_html=True) # Alignment
-                        if st.button("Confirm Partial", type="primary", key="ft2_confirm_partial"):
-                            submit_resolution(ft2_data["id"], sku_data["sku"], "partial", partial_qty)
 
-# ==========================================
-# MIDDLE COLUMN: Scenario 2 - Blind Spot Detection (FT-01)
-# ==========================================
-with middle_col:
-    with st.container(border=True):
-        ft1_data = containers.get("FT-01")
-        if ft1_data:
-            sku_data = ft1_data["skus"][0]
-            st.subheader(f"Vision Task: {ft1_data['id']}")
-            st.caption(f"Last Known State: {ft1_data['status']} | Zone: {ft1_data['zone']}")
-            
-            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
-            
-            # Internal columns for clean metric display
-            metrics_c3, metrics_c4 = st.columns(2)
-            
-            with metrics_c3:
-                st.metric("Expected Quantity", sku_data["expected"])
-                
-            with metrics_c4:
-                st.metric("CV Fill Events", sku_data["cv_filled"])
-                if sku_data["is_resolved"]:
-                    st.metric("Confirmed in Backstock", sku_data["recovered_units"])
-                
-            st.markdown("---")
-            
-            if sku_data["is_resolved"]:
-                st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
-                st.metric("Unaccounted Variance", 0)
-            else:
-                st.metric("Unaccounted Variance", sku_data["variance"], delta="-6 untracked", delta_color="inverse")
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                if sku_data["variance"] > 0:
-                    st.warning(
-                        f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units of {sku_data['sku']} are unaccounted for. "
-                        "System suspects untracked backstock routing."
-                    )
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    
-                    # Interactive Resolution Button
-                    if st.button(f"Confirm {sku_data['variance']} Units in Backstock", type="primary", use_container_width=True):
-                        submit_resolution(ft1_data["id"], sku_data["sku"], "all", sku_data["variance"])
-                else:
-                    st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
+def render_unaccounted_variance_metric(
+    sku_data: dict,
+    *,
+    delta: str | None = None,
+    delta_color: str = "normal",
+) -> None:
+    metric_kwargs = {"label": "Unaccounted Variance", "value": _unaccounted_variance_value(sku_data)}
+    if delta is not None:
+        metric_kwargs["delta"] = delta
+        metric_kwargs["delta_color"] = delta_color
+    st.metric(**metric_kwargs)
 
-# ==========================================
-# RIGHT COLUMN: Scenario 3 - High Value Fast-Moving SKU (FT-03)
-# ==========================================
-with right_col:
-    with st.container(border=True):
-        ft3_data = containers.get("FT-03")
-        if ft3_data:
-            sku_data = ft3_data["skus"][0]
-            st.subheader(f"Vision Task: {ft3_data['id']}")
-            st.caption(f"Last Known State: {ft3_data['status']} | Zone: {ft3_data['zone']}")
-            
-            st.markdown(f"**SKU Profile:** `{sku_data['sku']}`")
-            
-            # Internal columns for clean metric display
-            metrics_c5, metrics_c6 = st.columns(2)
-            
-            with metrics_c5:
-                st.metric("Expected Quantity", sku_data["expected"])
-                
-            with metrics_c6:
-                st.metric("CV Fill Events", sku_data["cv_filled"])
-                st.metric("Confirmed in Backstock", sku_data["confirmed_backstock"])
-                
-            st.markdown("---")
-            
-            if sku_data["variance"] == 0:
-                st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
-                st.metric("Unaccounted Variance", 0)
-            else:
-                st.metric("Unaccounted Variance", sku_data["variance"])
-                st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
+
+def _sku_widget_slug(sku: str) -> str:
+    return sku.replace("-", "_").lower()
+
+
+def _operational_widget_key(action: str, container_id: str, sku: str) -> str:
+    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
+
+
+def _outstanding_units(sku_data: dict) -> int:
+    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
+
+
+def _requires_operational_control_deck(sku_data: dict) -> bool:
+    """True when the SKU still has phantom drift or unaccounted variance to resolve."""
+    if sku_data.get("is_resolved"):
+        return False
+    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
+
+
+def render_operational_control_deck(container_data, sku_data) -> None:
+    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+    if not _requires_operational_control_deck(sku_data):
+        return
+
+    container_id = container_data["id"]
+    sku = sku_data["sku"]
+    units = _outstanding_units(sku_data)
+    partial_flag = _operational_widget_key("show_partial", container_id, sku)
+
+    if partial_flag not in st.session_state:
+        st.session_state[partial_flag] = False
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    ctrl_cols = st.columns(3)
+    with ctrl_cols[0]:
+        if st.button(
+            f"All Found ({units})",
+            key=_operational_widget_key("all_found", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "all", units)
+
+    with ctrl_cols[1]:
+        if st.button(
+            "Not Present (0)",
+            key=_operational_widget_key("not_present", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "none", 0)
+
+    with ctrl_cols[2]:
+        if st.button(
+            f"Partial ({units})",
+            key=_operational_widget_key("partial", container_id, sku),
+            use_container_width=True,
+        ):
+            st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    if st.session_state.get(partial_flag, False):
+        st.warning("Partial recovery in progress — enter quantity recovered below.")
+        partial_col1, partial_col2 = st.columns([2, 1])
+        with partial_col1:
+            max_partial = max(1, units - 1) if units > 1 else 1
+            partial_qty = st.number_input(
+                "Quantity Recovered?",
+                min_value=1,
+                max_value=max_partial,
+                value=1,
+                key=_operational_widget_key("partial_qty", container_id, sku),
+            )
+        with partial_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(
+                "Confirm Partial",
+                type="primary",
+                key=_operational_widget_key("confirm_partial", container_id, sku),
+            ):
+                submit_resolution(container_id, sku, "partial", partial_qty)
+
+
+def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
+    """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
+    product_name = sku_data.get("name", sku_data["sku"])
+
+    st.subheader(f"Execution Telemetry: {container_data['id']}")
+    st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
+    st.markdown(
+        f"**SKU Profile:** {product_name}  \n"
+        f"`{sku_data['sku']}`  \n"
+        f"**EAN:** `{sku_data.get('ean', '')}`"
+    )
+
+    metrics_left, metrics_right = st.columns(2)
+    with metrics_left:
+        st.metric("Expected Quantity", sku_data["expected"])
+        st.metric("Sent to Backstock", sku_data.get("backstock", 0))
+    with metrics_right:
+        st.metric("Worked to Shelf", sku_data["worked"])
+        st.metric("Phantom Drift", sku_data["drift"])
+
+    st.markdown("---")
+    render_unaccounted_variance_metric(sku_data)
+
+    if sku_data["is_resolved"]:
+        if sku_data["resolution_type"] == "all":
+            st.success("✅ **Resolved:** All units recovered and accounted for.")
+        elif sku_data["resolution_type"] == "none":
+            st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
+        elif sku_data["resolution_type"] == "partial":
+            st.warning(
+                f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
+                f"{sku_data['shrink_confirmed']} confirmed as shrink."
+            )
+    else:
+        if sku_data["drift"] > 0:
+            st.warning(
+                f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
+                f"'{product_name}' are missing and completely unaccounted for in system telemetry."
+            )
+        elif sku_data.get("variance", 0) > 0:
+            st.warning(
+                f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
+                "System suspects untracked backstock routing."
+            )
+        else:
+            st.success(
+                "✅ **Fully accounted:** Case split matches telemetry "
+                f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+            )
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(container_data, sku_data)
+
+
+def build_flattop_card_grid(containers_dict):
+    """Ordered Execution Telemetry flattop cards for grid rendering."""
+    cards = []
+
+    ft02 = containers_dict.get("FT-02")
+    if ft02 and ft02.get("skus"):
+        cards.append((ft02, ft02["skus"][0], "ft2"))
+
+    ft04 = containers_dict.get("FT-04")
+    if ft04:
+        for sku_data in ft04.get("skus", []):
+            line_key = sku_data["sku"].replace("-", "_").lower()
+            cards.append((ft04, sku_data, f"ft4_{line_key}"))
+
+    return cards
+
+
+FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
+FLATTOP_CARDS_PER_ROW = 3
+
+
+def render_flattop_card(container_data, sku_data, key_prefix):
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        render_execution_telemetry_card(container_data, sku_data, key_prefix)
+
+
+flattop_cards = build_flattop_card_grid(containers)
+for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
+    row_cards = flattop_cards[row_start : row_start + FLATTOP_CARDS_PER_ROW]
+    row_columns = st.columns(3)
+    for column_index, column in enumerate(row_columns):
+        with column:
+            if column_index < len(row_cards):
+                render_flattop_card(*row_cards[column_index])
