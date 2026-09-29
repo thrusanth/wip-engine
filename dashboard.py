@@ -158,6 +158,55 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
+def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> None:
+    """Native Streamlit status callouts + buttons for phantom drift resolution."""
+    drift = sku_data["drift"]
+    partial_flag = f"{prefix}_show_partial"
+    if partial_flag not in st.session_state:
+        st.session_state[partial_flag] = False
+
+    col_1, col_2, col_3 = st.columns(3)
+    with col_1:
+        st.metric("All Found", drift, help="Mark every unaccounted unit as recovered")
+        st.success(f"**All Found ({drift})**")
+        if st.button("Apply · All Found", key=f"{prefix}_all", use_container_width=True):
+            submit_resolution(container_data["id"], sku_data["sku"], "all", drift)
+
+    with col_2:
+        st.metric("Not Present", 0, help="Confirm all unaccounted units as shrink")
+        st.error("**Not Present (0)**")
+        if st.button("Apply · Not Present", key=f"{prefix}_none", use_container_width=True):
+            submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
+
+    with col_3:
+        st.metric("Partial", drift, help="Recover some units; remaining drift becomes shrink")
+        st.info(f"**Partial ({drift})**")
+        if st.button("Apply · Partial", key=f"{prefix}_partial", use_container_width=True):
+            st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    if st.session_state.get(partial_flag, False):
+        st.warning("Partial recovery in progress — enter quantity recovered below.")
+        partial_col1, partial_col2 = st.columns([2, 1])
+        with partial_col1:
+            max_partial = max(1, drift - 1)
+            partial_qty = st.number_input(
+                "Quantity Recovered?",
+                min_value=1,
+                max_value=max_partial,
+                value=1,
+                key=f"{prefix}_partial_qty",
+            )
+        with partial_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Confirm Partial", type="primary", key=f"{prefix}_confirm_partial"):
+                submit_resolution(
+                    container_data["id"],
+                    sku_data["sku"],
+                    "partial",
+                    partial_qty,
+                )
+
+
 def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
     """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
     prefix = card_key_prefix
@@ -198,83 +247,7 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
             f"'{product_name}' are missing and completely unaccounted for in system telemetry."
         )
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown(
-            """
-<style>
-/* Green Button (All Found) */
-div[data-testid="column"]:nth-of-type(1) [data-baseweb="button"] {
-    background-color: #198754 !important;
-    background: #198754 !important;
-    color: #ffffff !important;
-    border-color: #198754 !important;
-}
-
-/* Red Button (Not Present) */
-div[data-testid="column"]:nth-of-type(2) [data-baseweb="button"] {
-    background-color: #dc3545 !important;
-    background: #dc3545 !important;
-    color: #ffffff !important;
-    border-color: #dc3545 !important;
-}
-
-/* Blue Button (Partial) */
-div[data-testid="column"]:nth-of-type(3) [data-baseweb="button"] {
-    background-color: #0d6efd !important;
-    background: #0d6efd !important;
-    color: #ffffff !important;
-    border-color: #0d6efd !important;
-}
-</style>
-            """,
-            unsafe_allow_html=True,
-        )
-        col_1, col_2, col_3 = st.columns(3)
-        with col_1:
-            if st.button(
-                f"All Found ({sku_data['drift']})",
-                key=f"{prefix}_all",
-                use_container_width=True,
-            ):
-                submit_resolution(container_data["id"], sku_data["sku"], "all", sku_data["drift"])
-        with col_2:
-            if st.button(
-                "Not Present (0)",
-                key=f"{prefix}_none",
-                use_container_width=True,
-            ):
-                submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
-        with col_3:
-            partial_flag = f"{prefix}_show_partial"
-            if partial_flag not in st.session_state:
-                st.session_state[partial_flag] = False
-            if st.button(
-                f"Partial ({sku_data['drift']})",
-                key=f"{prefix}_partial",
-                use_container_width=True,
-            ):
-                st.session_state[partial_flag] = not st.session_state[partial_flag]
-
-        if st.session_state.get(partial_flag, False):
-            st.markdown("<br>", unsafe_allow_html=True)
-            partial_col1, partial_col2 = st.columns([2, 1])
-            with partial_col1:
-                max_partial = max(1, sku_data["drift"] - 1)
-                partial_qty = st.number_input(
-                    "Quantity Recovered?",
-                    min_value=1,
-                    max_value=max_partial,
-                    value=1,
-                    key=f"{prefix}_partial_qty",
-                )
-            with partial_col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Confirm Partial", type="primary", key=f"{prefix}_confirm_partial"):
-                    submit_resolution(
-                        container_data["id"],
-                        sku_data["sku"],
-                        "partial",
-                        partial_qty,
-                    )
+        render_phantom_resolution_actions(container_data, sku_data, prefix)
     elif sku_data.get("variance", 0) > 0:
         st.warning(
             f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
