@@ -17,27 +17,29 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Count 3rd from the end (All Found - Green) */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(3) button {
+/* Target ONLY button rows nested inside the grid columns */
+
+/* Column 1 (All Found - Green) */
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button {
     background-color: #198754 !important; border-color: #198754 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(3) button:hover {
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button:hover {
     background-color: #157347 !important; border-color: #146c43 !important;
 }
 
-/* Count 2nd from the end (Not Present - Red) */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(2) button {
+/* Column 2 (Not Present - Red) */
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button {
     background-color: #dc3545 !important; border-color: #dc3545 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(2) button:hover {
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button:hover {
     background-color: #bb2d3b !important; border-color: #b02a37 !important;
 }
 
-/* Count 1st from the end (Partial - Blue) */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(1) button {
+/* Column 3 (Partial - Blue) */
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button {
     background-color: #0d6efd !important; border-color: #0d6efd !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(1) button:hover {
+div[data-testid="column"] div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button:hover {
     background-color: #0b5ed7 !important; border-color: #0a58ca !important;
 }
 </style>
