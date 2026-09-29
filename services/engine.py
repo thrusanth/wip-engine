@@ -109,12 +109,23 @@ class WipEngine:
                 sku_state.variance = 0
                 sku_state.shrink_confirmed = initial_drift
             elif sku_state.resolution_type == ResolutionType.PARTIAL:
-                sku_state.drift = initial_drift - sku_state.recovered_units
+                sku_state.drift = max(0, initial_drift)
                 sku_state.variance = 0
                 sku_state.shrink_confirmed = sku_state.drift
         else:
             sku_state.drift = max(0, initial_drift)
             sku_state.variance = max(0, initial_drift)
+
+    @staticmethod
+    def _unaccounted_units(sku_state: SkuState) -> int:
+        return max(
+            0,
+            sku_state.expected
+            - sku_state.worked
+            - sku_state.backstock
+            - sku_state.cv_filled
+            - sku_state.confirmed_backstock,
+        )
 
     def _recalculate_all(self):
         total_drift = 0
@@ -319,9 +330,34 @@ class WipEngine:
             if not target_sku:
                 raise ValueError(f"SKU {event.sku} not found in container {event.container_id}")
 
-            target_sku.is_resolved = True
-            target_sku.resolution_type = event.resolution_type
-            target_sku.recovered_units = event.recovered_units
+            outstanding = self._unaccounted_units(target_sku)
+
+            if event.resolution_type == ResolutionType.ALL:
+                routed = outstanding if event.recovered_units <= 0 else min(event.recovered_units, outstanding)
+                target_sku.backstock += routed
+                target_sku.is_resolved = True
+                target_sku.resolution_type = ResolutionType.ALL
+                target_sku.recovered_units = routed
+            elif event.resolution_type == ResolutionType.PARTIAL:
+                routed = min(max(0, event.recovered_units), outstanding)
+                if routed <= 0:
+                    raise ValueError("Partial resolution requires at least one recovered unit")
+                target_sku.backstock += routed
+                remaining = outstanding - routed
+                if remaining <= 0:
+                    target_sku.is_resolved = True
+                    target_sku.resolution_type = ResolutionType.PARTIAL
+                    target_sku.recovered_units = routed
+                else:
+                    target_sku.is_resolved = False
+                    target_sku.resolution_type = None
+                    target_sku.recovered_units = 0
+            elif event.resolution_type == ResolutionType.NONE:
+                target_sku.is_resolved = True
+                target_sku.resolution_type = ResolutionType.NONE
+                target_sku.recovered_units = 0
+            else:
+                raise ValueError(f"Unsupported resolution type: {event.resolution_type}")
 
             self._recalculate_all()
             self._sync_active_exceptions()

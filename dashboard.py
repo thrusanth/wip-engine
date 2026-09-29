@@ -67,7 +67,36 @@ def fetch_telemetry():
         st.error(f"Failed to connect to backend API: {e}")
         st.stop()
 
-def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
+_DASHBOARD_CONTAINERS_KEY = "dashboard_containers"
+_DASHBOARD_METRICS_KEY = "dashboard_metrics"
+_USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
+
+
+def _persist_dashboard_telemetry(payload: dict) -> None:
+    """Store latest telemetry in session so cards re-render with updated metrics."""
+    st.session_state[_DASHBOARD_CONTAINERS_KEY] = payload.get("containers", {})
+    st.session_state[_DASHBOARD_METRICS_KEY] = payload.get("metrics", {})
+    st.session_state[_USE_CACHED_TELEMETRY_KEY] = True
+
+
+def _load_dashboard_telemetry_from_session() -> tuple[dict | None, dict | None]:
+    if not st.session_state.get(_USE_CACHED_TELEMETRY_KEY):
+        return None, None
+    st.session_state[_USE_CACHED_TELEMETRY_KEY] = False
+    return (
+        st.session_state.get(_DASHBOARD_CONTAINERS_KEY),
+        st.session_state.get(_DASHBOARD_METRICS_KEY),
+    )
+
+
+def submit_resolution(
+    container_id,
+    sku,
+    resolution_type,
+    recovered_units=0,
+    *,
+    partial_flag_key: str | None = None,
+):
     """Submits a resolution event to the FastAPI backend."""
     payload = {
         "container_id": container_id,
@@ -85,6 +114,9 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         if response.status_code != 200:
             st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
             st.stop()
+        _persist_dashboard_telemetry(response.json())
+        if partial_flag_key is not None:
+            st.session_state[partial_flag_key] = False
         st.rerun()
     except requests.exceptions.Timeout:
         st.warning(f"Backend API timed out while submitting resolution for container {container_id}.")
@@ -93,23 +125,37 @@ def submit_resolution(container_id, sku, resolution_type, recovered_units=0):
         st.error(f"Failed to submit resolution due to connection error: {e}")
         st.stop()
 
-# Fetch data on load
+# Fetch data on load (prefer session cache immediately after control-deck actions)
 try:
-    telemetry_data = fetch_telemetry()
-    
-    if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
-        metrics = telemetry_data["metrics"]
-        containers = telemetry_data.get("containers", {})
-    else:
-        st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
-        metrics = {
+    cached_containers, cached_metrics = _load_dashboard_telemetry_from_session()
+    if cached_containers is not None:
+        containers = cached_containers
+        metrics = cached_metrics or {
             "pending_delivery_cages": 0,
             "active_flattops": 0,
             "detected_phantom_drift": 0,
             "daily_shrink_cost": 0.0,
-            "pending_edge_tasks": 0
+            "pending_edge_tasks": 0,
         }
-        containers = {}
+    else:
+        telemetry_data = fetch_telemetry()
+
+        if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
+            metrics = telemetry_data["metrics"]
+            containers = telemetry_data.get("containers", {})
+        else:
+            st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
+            metrics = {
+                "pending_delivery_cages": 0,
+                "active_flattops": 0,
+                "detected_phantom_drift": 0,
+                "daily_shrink_cost": 0.0,
+                "pending_edge_tasks": 0
+            }
+            containers = {}
+
+    st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
+    st.session_state[_DASHBOARD_METRICS_KEY] = metrics
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
@@ -242,7 +288,7 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             key=_operational_widget_key("all_found", container_id, sku),
             use_container_width=True,
         ):
-            submit_resolution(container_id, sku, "all", units)
+            submit_resolution(container_id, sku, "all", units, partial_flag_key=partial_flag)
 
     with ctrl_cols[1]:
         if st.button(
@@ -250,7 +296,7 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             key=_operational_widget_key("not_present", container_id, sku),
             use_container_width=True,
         ):
-            submit_resolution(container_id, sku, "none", 0)
+            submit_resolution(container_id, sku, "none", 0, partial_flag_key=partial_flag)
 
     with ctrl_cols[2]:
         if st.button(
@@ -279,7 +325,13 @@ def render_operational_control_deck(container_data, sku_data) -> None:
                 type="primary",
                 key=_operational_widget_key("confirm_partial", container_id, sku),
             ):
-                submit_resolution(container_id, sku, "partial", partial_qty)
+                submit_resolution(
+                    container_id,
+                    sku,
+                    "partial",
+                    partial_qty,
+                    partial_flag_key=partial_flag,
+                )
 
 
 def build_tasks(containers_dict: dict) -> list[dict]:
