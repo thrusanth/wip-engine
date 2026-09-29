@@ -158,36 +158,6 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-_CONTROL_DECK_ROW = (
-    'div[data-testid="stMarkdownContainer"]:has(.my-control-deck)'
-    ' + div[data-testid="stHorizontalBlock"]'
-)
-
-
-CONTROL_DECK_STYLES = f"""
-<style>
-.my-control-deck div[data-testid="column"]:nth-child(1) button,
-{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(1) button {{
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}}
-.my-control-deck div[data-testid="column"]:nth-child(2) button,
-{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(2) button {{
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}}
-.my-control-deck div[data-testid="column"]:nth-child(3) button,
-{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(3) button {{
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}}
-</style>
-"""
-
-
 def _sku_widget_slug(sku: str) -> str:
     return sku.replace("-", "_").lower()
 
@@ -207,10 +177,64 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def _ensure_control_deck_styles_loaded() -> None:
-    if not st.session_state.get("_control_deck_styles_loaded"):
-        st.markdown(CONTROL_DECK_STYLES, unsafe_allow_html=True)
-        st.session_state["_control_deck_styles_loaded"] = True
+def _control_deck_container_key(container_id: str, sku: str) -> str:
+    return _operational_widget_key("control_deck", container_id, sku)
+
+
+def _streamlit_key_class(widget_key: str) -> str:
+    return f"st-key-{widget_key}"
+
+
+def _inject_control_deck_styles(deck_key: str) -> None:
+    """Scope horizontal-block column rules to this deck's native st.container(key=...)."""
+    loaded_keys = st.session_state.setdefault("_control_deck_css_keys", set())
+    if deck_key in loaded_keys:
+        return
+
+    scope = f'div[class*="{_streamlit_key_class(deck_key)}"]'
+    columns = f'{scope} div[data-testid="stHorizontalBlock"] > div[data-testid="column"]'
+    st.markdown(
+        f"""
+<style>
+/* Control deck: {deck_key} */
+{columns}:nth-child(1) button {{
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}}
+{columns}:nth-child(2) button {{
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}}
+{columns}:nth-child(3) button {{
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}}
+{columns}:nth-child(1) button:hover,
+{columns}:nth-child(1) button:focus {{
+    background-color: #157347 !important;
+    border-color: #146c43 !important;
+    color: #ffffff !important;
+}}
+{columns}:nth-child(2) button:hover,
+{columns}:nth-child(2) button:focus {{
+    background-color: #bb2d3b !important;
+    border-color: #b02a37 !important;
+    color: #ffffff !important;
+}}
+{columns}:nth-child(3) button:hover,
+{columns}:nth-child(3) button:focus {{
+    background-color: #0b5ed7 !important;
+    border-color: #0a58ca !important;
+    color: #ffffff !important;
+}}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+    loaded_keys.add(deck_key)
 
 
 def render_control_deck(container_data, sku_data) -> None:
@@ -226,11 +250,12 @@ def render_control_deck(container_data, sku_data) -> None:
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    _ensure_control_deck_styles_loaded()
+    deck_key = _control_deck_container_key(container_id, sku)
 
-    with st.container():
-        st.markdown('<div class="my-control-deck">', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    _inject_control_deck_styles(deck_key)
+
+    with st.container(key=deck_key):
         cols = st.columns(3)
         with cols[0]:
             if st.button(
@@ -253,7 +278,6 @@ def render_control_deck(container_data, sku_data) -> None:
                 use_container_width=True,
             ):
                 st.session_state[partial_flag] = not st.session_state[partial_flag]
-        st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.get(partial_flag, False):
         st.warning("Partial recovery in progress — enter quantity recovered below.")
