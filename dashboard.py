@@ -181,60 +181,61 @@ def _control_deck_container_key(container_id: str, sku: str) -> str:
     return _operational_widget_key("control_deck", container_id, sku)
 
 
-def _streamlit_key_class(widget_key: str) -> str:
-    return f"st-key-{widget_key}"
+_CONTROL_DECK_IN_CARD = (
+    'div[class*="st-key-control_deck"] div[data-testid="stHorizontalBlock"]'
+    " > div[data-testid=\"column\"]"
+)
 
 
-def _inject_control_deck_styles(deck_key: str) -> None:
-    """Scope horizontal-block column rules to this deck's native st.container(key=...)."""
-    loaded_keys = st.session_state.setdefault("_control_deck_css_keys", set())
-    if deck_key in loaded_keys:
-        return
-
-    scope = f'div[class*="{_streamlit_key_class(deck_key)}"]'
-    columns = f'{scope} div[data-testid="stHorizontalBlock"] > div[data-testid="column"]'
-    st.markdown(
-        f"""
+CARD_TYPE_CONTROL_DECK_STYLES = f"""
 <style>
-/* Control deck: {deck_key} */
-{columns}:nth-child(1) button {{
+/* Telemetry Card Control Deck */
+.telemetry-card div[data-testid="column"]:nth-of-type(1) button,
+div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(1) button {{
     background-color: #198754 !important;
     border-color: #198754 !important;
     color: #ffffff !important;
 }}
-{columns}:nth-child(2) button {{
+.telemetry-card div[data-testid="column"]:nth-of-type(2) button,
+div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(2) button {{
     background-color: #dc3545 !important;
     border-color: #dc3545 !important;
     color: #ffffff !important;
 }}
-{columns}:nth-child(3) button {{
+.telemetry-card div[data-testid="column"]:nth-of-type(3) button,
+div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(3) button {{
     background-color: #0d6efd !important;
     border-color: #0d6efd !important;
     color: #ffffff !important;
 }}
-{columns}:nth-child(1) button:hover,
-{columns}:nth-child(1) button:focus {{
-    background-color: #157347 !important;
-    border-color: #146c43 !important;
+
+/* Vision Task Card Control Deck */
+.vision-card div[data-testid="column"]:nth-of-type(1) button,
+div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(1) button {{
+    background-color: #198754 !important;
+    border-color: #198754 !important;
     color: #ffffff !important;
 }}
-{columns}:nth-child(2) button:hover,
-{columns}:nth-child(2) button:focus {{
-    background-color: #bb2d3b !important;
-    border-color: #b02a37 !important;
+.vision-card div[data-testid="column"]:nth-of-type(2) button,
+div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(2) button {{
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
     color: #ffffff !important;
 }}
-{columns}:nth-child(3) button:hover,
-{columns}:nth-child(3) button:focus {{
-    background-color: #0b5ed7 !important;
-    border-color: #0a58ca !important;
+.vision-card div[data-testid="column"]:nth-of-type(3) button,
+div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(3) button {{
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
     color: #ffffff !important;
 }}
 </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    loaded_keys.add(deck_key)
+"""
+
+
+def _ensure_card_type_control_deck_styles() -> None:
+    if not st.session_state.get("_card_type_control_deck_styles_loaded"):
+        st.markdown(CARD_TYPE_CONTROL_DECK_STYLES, unsafe_allow_html=True)
+        st.session_state["_card_type_control_deck_styles_loaded"] = True
 
 
 def render_control_deck(container_data, sku_data) -> None:
@@ -253,7 +254,7 @@ def render_control_deck(container_data, sku_data) -> None:
     deck_key = _control_deck_container_key(container_id, sku)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    _inject_control_deck_styles(deck_key)
+    _ensure_card_type_control_deck_styles()
 
     with st.container(key=deck_key):
         cols = st.columns(3)
@@ -444,13 +445,16 @@ FLATTOP_CARDS_PER_ROW = 3
 
 
 def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
+    card_class = "telemetry-card" if card_kind == "execution" else "vision-card"
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
         if card_kind == "execution":
             render_execution_telemetry_card(container_data, sku_data, key_prefix)
         elif card_kind == "vision_ft01":
             render_vision_task_ft01_card(container_data, sku_data)
         elif card_kind == "vision_ft03":
             render_vision_task_ft03_card(container_data, sku_data)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 flattop_cards = build_flattop_card_grid(containers)
