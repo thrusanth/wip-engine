@@ -158,11 +158,33 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-_CONTROL_DECK_COLUMN_COLORS = (
-    ("#198754", "#198754"),  # All Found (green)
-    ("#dc3545", "#dc3545"),  # Not Present (red)
-    ("#0d6efd", "#0d6efd"),  # Partial (blue)
-)
+OPERATIONAL_CONTROL_DECK_STYLES = """
+<style>
+/* Column 1: All Found (Green) */
+div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(1) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+
+/* Column 2: Not Present (Red) */
+div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(2) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+
+/* Column 3: Partial (Blue) */
+div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(3) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+</style>
+"""
 
 
 def _sku_widget_slug(sku: str) -> str:
@@ -184,52 +206,6 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def _control_deck_scope_id(container_id: str, sku: str) -> str:
-    """Unique, CSS-safe anchor id for one card's operational control deck."""
-    slug = _sku_widget_slug(sku)
-    return f"operational-control-deck-{container_id}-{slug}".lower().replace(" ", "-")
-
-
-def _control_deck_button_selectors(deck_id: str, column_index: int) -> list[str]:
-    """Streamlit renders st.columns in the horizontal block immediately after the marker."""
-    row = (
-        f'div[data-testid="stMarkdownContainer"]:has(#{deck_id})'
-        f' + div[data-testid="stHorizontalBlock"]'
-    )
-    return [
-        f'{row} > div[data-testid="column"]:nth-child({column_index}) button',
-        f'{row} > div:nth-child({column_index}) button[kind="secondary"]',
-        f'{row} > div:nth-child({column_index}) button[data-testid="stBaseButton-secondary"]',
-    ]
-
-
-def _control_deck_styles_for_scope(deck_id: str) -> str:
-    """Per-card CSS so column colors never bleed across cards or the page grid."""
-    chunks: list[str] = []
-    for column_index, (bg, border) in enumerate(_CONTROL_DECK_COLUMN_COLORS, start=1):
-        selectors = _control_deck_button_selectors(deck_id, column_index)
-        declaration = (
-            f"background-color: {bg} !important; "
-            f"border-color: {border} !important; "
-            f"color: #ffffff !important;"
-        )
-        base = ",\n".join(selectors)
-        chunks.append(f"{base} {{\n    {declaration}\n}}")
-        state_selectors = [
-            f"{selector}:{pseudo}"
-            for pseudo in ("hover", "focus", "focus-visible", "active")
-            for selector in selectors
-        ]
-        chunks.append(f"{',\n'.join(state_selectors)} {{\n    {declaration}\n}}")
-        # Keep label text white on colored buttons for this deck row only.
-        label_selectors = [
-            f'{s} p' for s in selectors
-        ]
-        label_block = ",\n".join(label_selectors)
-        chunks.append(f"{label_block} {{\n    color: #ffffff !important;\n}}")
-    return "\n".join(chunks)
-
-
 def render_operational_control_deck(container_data, sku_data) -> None:
     """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
     if not _requires_operational_control_deck(sku_data):
@@ -243,17 +219,10 @@ def render_operational_control_deck(container_data, sku_data) -> None:
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    deck_id = _control_deck_scope_id(container_id, sku)
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(
-        f'<div id="{deck_id}" class="operational-control-deck"></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<style>\n/* Scoped control deck: {deck_id} */\n"
-        f"{_control_deck_styles_for_scope(deck_id)}\n</style>",
-        unsafe_allow_html=True,
-    )
+    if not st.session_state.get("_operational_control_deck_styles_loaded"):
+        st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
+        st.session_state["_operational_control_deck_styles_loaded"] = True
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
