@@ -158,30 +158,76 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
+PHANTOM_RESOLUTION_BUTTON_STYLES = """
+<style>
+div[class*="st-key-"][class$="_all"] [data-baseweb="button"] {
+    background-color: #198754 !important;
+    background: #198754 !important;
+    color: #ffffff !important;
+    border-color: #198754 !important;
+}
+div[class*="st-key-"][class$="_all"] [data-baseweb="button"] p {
+    color: #ffffff !important;
+}
+div[class*="st-key-"][class$="_none"] [data-baseweb="button"] {
+    background-color: #dc3545 !important;
+    background: #dc3545 !important;
+    color: #ffffff !important;
+    border-color: #dc3545 !important;
+}
+div[class*="st-key-"][class$="_none"] [data-baseweb="button"] p {
+    color: #ffffff !important;
+}
+div[class*="st-key-"][class$="_partial"] [data-baseweb="button"] {
+    background-color: #0d6efd !important;
+    background: #0d6efd !important;
+    color: #ffffff !important;
+    border-color: #0d6efd !important;
+}
+div[class*="st-key-"][class$="_partial"] [data-baseweb="button"] p {
+    color: #ffffff !important;
+}
+</style>
+"""
+
+
 def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> None:
-    """Native Streamlit status callouts + buttons for phantom drift resolution."""
+    """Colored primary buttons for phantom drift resolution (single action row)."""
     drift = sku_data["drift"]
     partial_flag = f"{prefix}_show_partial"
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
+    if not st.session_state.get("_phantom_resolution_button_styles_loaded"):
+        st.markdown(PHANTOM_RESOLUTION_BUTTON_STYLES, unsafe_allow_html=True)
+        st.session_state["_phantom_resolution_button_styles_loaded"] = True
+
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
-        st.metric("All Found", drift, help="Mark every unaccounted unit as recovered")
-        st.success(f"**All Found ({drift})**")
-        if st.button("Apply · All Found", key=f"{prefix}_all", use_container_width=True):
+        if st.button(
+            f"All Found ({drift})",
+            key=f"{prefix}_all",
+            type="primary",
+            use_container_width=True,
+        ):
             submit_resolution(container_data["id"], sku_data["sku"], "all", drift)
 
     with col_2:
-        st.metric("Not Present", 0, help="Confirm all unaccounted units as shrink")
-        st.error("**Not Present (0)**")
-        if st.button("Apply · Not Present", key=f"{prefix}_none", use_container_width=True):
+        if st.button(
+            "Not Present (0)",
+            key=f"{prefix}_none",
+            type="primary",
+            use_container_width=True,
+        ):
             submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
 
     with col_3:
-        st.metric("Partial", drift, help="Recover some units; remaining drift becomes shrink")
-        st.info(f"**Partial ({drift})**")
-        if st.button("Apply · Partial", key=f"{prefix}_partial", use_container_width=True):
+        if st.button(
+            f"Partial ({drift})",
+            key=f"{prefix}_partial",
+            type="primary",
+            use_container_width=True,
+        ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
 
     if st.session_state.get(partial_flag, False):
