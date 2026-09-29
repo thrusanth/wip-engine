@@ -158,54 +158,54 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-_CONTROL_DECK_PANEL_CLASS = "control-deck-panel"
-_CONTROL_DECK_STYLE_COLUMNS = (
-    ("btn-green-col", 1, "#198754", "#157347", "#146c43"),
-    ("btn-red-col", 2, "#dc3545", "#bb2d3b", "#b02a37"),
-    ("btn-blue-col", 3, "#0d6efd", "#0b5ed7", "#0a58ca"),
-)
+CONTROL_DECK_STYLES = """
+<style>
+.col-all-found button,
+div[data-testid="column"]:has(.col-all-found) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+.col-all-found button:hover,
+.col-all-found button:focus,
+div[data-testid="column"]:has(.col-all-found) button:hover,
+div[data-testid="column"]:has(.col-all-found) button:focus {
+    background-color: #157347 !important;
+    border-color: #146c43 !important;
+    color: #ffffff !important;
+}
 
+.col-not-present button,
+div[data-testid="column"]:has(.col-not-present) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+.col-not-present button:hover,
+.col-not-present button:focus,
+div[data-testid="column"]:has(.col-not-present) button:hover,
+div[data-testid="column"]:has(.col-not-present) button:focus {
+    background-color: #bb2d3b !important;
+    border-color: #b02a37 !important;
+    color: #ffffff !important;
+}
 
-def _control_deck_row_button_selector(column_index: int) -> str:
-    """Target only the 3-button row immediately after a control-deck panel marker."""
-    return (
-        f'div[data-testid="stMarkdownContainer"]:has(.{_CONTROL_DECK_PANEL_CLASS})'
-        f' + div[data-testid="stHorizontalBlock"]'
-        f' > div[data-testid="column"]:nth-child({column_index}) button'
-    )
-
-
-def _build_control_deck_styles() -> str:
-    chunks = ["<style>"]
-    for wrapper_class, column_index, base_bg, hover_bg, hover_border in _CONTROL_DECK_STYLE_COLUMNS:
-        row_selector = _control_deck_row_button_selector(column_index)
-        wrapper_selector = f'div[data-testid="column"]:has(.{wrapper_class}) button'
-        base_selectors = f".{wrapper_class} button,\n{row_selector},\n{wrapper_selector}"
-        base_rule = (
-            f"background-color: {base_bg} !important; "
-            f"border-color: {base_bg} !important; "
-            f"color: #ffffff !important;"
-        )
-        chunks.append(f"{base_selectors} {{\n    {base_rule}\n}}")
-        hover_rule = (
-            f"background-color: {hover_bg} !important; "
-            f"border-color: {hover_border} !important; "
-            f"color: #ffffff !important;"
-        )
-        for pseudo in ("hover", "focus", "active"):
-            state_selectors = ",\n".join(
-                [
-                    f".{wrapper_class} button:{pseudo}",
-                    f"{row_selector}:{pseudo}",
-                    f"{wrapper_selector}:{pseudo}",
-                ]
-            )
-            chunks.append(f"{state_selectors} {{\n    {hover_rule}\n}}")
-    chunks.append("</style>")
-    return "\n".join(chunks)
-
-
-CONTROL_DECK_STYLES = _build_control_deck_styles()
+.col-partial button,
+div[data-testid="column"]:has(.col-partial) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+.col-partial button:hover,
+.col-partial button:focus,
+div[data-testid="column"]:has(.col-partial) button:hover,
+div[data-testid="column"]:has(.col-partial) button:focus {
+    background-color: #0b5ed7 !important;
+    border-color: #0a58ca !important;
+    color: #ffffff !important;
+}
+</style>
+"""
 
 
 def _sku_widget_slug(sku: str) -> str:
@@ -248,14 +248,10 @@ def render_control_deck(container_data, sku_data) -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
     _ensure_control_deck_styles_loaded()
-    st.markdown(
-        f'<div class="{_CONTROL_DECK_PANEL_CLASS}"></div>',
-        unsafe_allow_html=True,
-    )
 
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
-        st.markdown('<div class="btn-green-col">', unsafe_allow_html=True)
+        st.markdown('<div class="col-all-found">', unsafe_allow_html=True)
         if st.button(
             f"All Found ({units})",
             key=_operational_widget_key("all_found", container_id, sku),
@@ -265,7 +261,7 @@ def render_control_deck(container_data, sku_data) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_2:
-        st.markdown('<div class="btn-red-col">', unsafe_allow_html=True)
+        st.markdown('<div class="col-not-present">', unsafe_allow_html=True)
         if st.button(
             "Not Present (0)",
             key=_operational_widget_key("not_present", container_id, sku),
@@ -275,7 +271,7 @@ def render_control_deck(container_data, sku_data) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_3:
-        st.markdown('<div class="btn-blue-col">', unsafe_allow_html=True)
+        st.markdown('<div class="col-partial">', unsafe_allow_html=True)
         if st.button(
             f"Partial ({units})",
             key=_operational_widget_key("partial", container_id, sku),
