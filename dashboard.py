@@ -14,6 +14,55 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown(
+    """
+<style>
+   /* Column 1: All Found (Green) - All states */
+   div[data-testid="column"]:nth-of-type(1) button {
+       background-color: #198754 !important;
+       border-color: #198754 !important;
+       color: #ffffff !important;
+   }
+   div[data-testid="column"]:nth-of-type(1) button:hover,
+   div[data-testid="column"]:nth-of-type(1) button:focus,
+   div[data-testid="column"]:nth-of-type(1) button:active {
+       background-color: #157347 !important;
+       border-color: #146c43 !important;
+       color: #ffffff !important;
+   }
+
+   /* Column 2: Not Present (Red) - All states */
+   div[data-testid="column"]:nth-of-type(2) button {
+       background-color: #dc3545 !important;
+       border-color: #dc3545 !important;
+       color: #ffffff !important;
+   }
+   div[data-testid="column"]:nth-of-type(2) button:hover,
+   div[data-testid="column"]:nth-of-type(2) button:focus,
+   div[data-testid="column"]:nth-of-type(2) button:active {
+       background-color: #bb2d3b !important;
+       border-color: #b02a37 !important;
+       color: #ffffff !important;
+   }
+
+   /* Column 3: Partial (Blue) - All states */
+   div[data-testid="column"]:nth-of-type(3) button {
+       background-color: #0d6efd !important;
+       border-color: #0d6efd !important;
+       color: #ffffff !important;
+   }
+   div[data-testid="column"]:nth-of-type(3) button:hover,
+   div[data-testid="column"]:nth-of-type(3) button:focus,
+   div[data-testid="column"]:nth-of-type(3) button:active {
+       background-color: #0b5ed7 !important;
+       border-color: #0a58ca !important;
+       color: #ffffff !important;
+   }
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # Main Title
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
