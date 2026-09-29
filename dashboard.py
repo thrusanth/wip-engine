@@ -200,55 +200,41 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(
             """
-<div class="phantom-resolution-action-styles" style="display:none"></div>
 <style>
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(1)
-  div.stButton > button {
-  background: #198754 !important;
-  color: #ffffff !important;
-  border: none !important;
+/* Green Button (All Found) */
+div[data-testid="column"]:nth-of-type(1) div[data-testid="stButton"] button {
+    background-color: #198754 !important;
+    color: #ffffff !important;
+    border: 1px solid #198754 !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(1)
-  div.stButton > button:hover {
-  background: #157347 !important;
-  color: #ffffff !important;
-  border: none !important;
+div[data-testid="column"]:nth-of-type(1) div[data-testid="stButton"] button:hover {
+    background-color: #157347 !important;
+    color: #ffffff !important;
+    border-color: #146c43 !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(2)
-  div.stButton > button {
-  background: #dc3545 !important;
-  color: #ffffff !important;
-  border: none !important;
+
+/* Red Button (Not Present) */
+div[data-testid="column"]:nth-of-type(2) div[data-testid="stButton"] button {
+    background-color: #dc3545 !important;
+    color: #ffffff !important;
+    border: 1px solid #dc3545 !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(2)
-  div.stButton > button:hover {
-  background: #bb2d3b !important;
-  color: #ffffff !important;
-  border: none !important;
+div[data-testid="column"]:nth-of-type(2) div[data-testid="stButton"] button:hover {
+    background-color: #bb2d3b !important;
+    color: #ffffff !important;
+    border-color: #b02a37 !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(3)
-  div.stButton > button {
-  background: #0d6efd !important;
-  color: #ffffff !important;
-  border: none !important;
+
+/* Blue Button (Partial) */
+div[data-testid="column"]:nth-of-type(3) div[data-testid="stButton"] button {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+    border: 1px solid #0d6efd !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(3)
-  div.stButton > button:hover {
-  background: #0b5ed7 !important;
-  color: #ffffff !important;
-  border: none !important;
+div[data-testid="column"]:nth-of-type(3) div[data-testid="stButton"] button:hover {
+    background-color: #0b5ed7 !important;
+    color: #ffffff !important;
+    border-color: #0a58ca !important;
 }
 </style>
             """,
