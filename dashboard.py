@@ -14,6 +14,41 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown(
+    """
+<style>
+/* Target the 3 control columns universally */
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(1) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(1) button:hover {
+    background-color: #157347 !important;
+}
+
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(2) button:hover {
+    background-color: #bb2d3b !important;
+}
+
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(3) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-of-type(3) button:hover {
+    background-color: #0b5ed7 !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # Main Title
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
@@ -158,39 +193,6 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-UNIVERSAL_CONTROL_DECK_STYLES = """
-<style>
-/* Universal 3-Button Control Deck Styling */
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(1) button {
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(1) button:hover {
-    background-color: #157347 !important;
-}
-
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) button {
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) button:hover {
-    background-color: #bb2d3b !important;
-}
-
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(3) button {
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}
-div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(3) button:hover {
-    background-color: #0b5ed7 !important;
-}
-</style>
-"""
-
-
 def _sku_widget_slug(sku: str) -> str:
     return sku.replace("-", "_").lower()
 
@@ -210,12 +212,6 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def _ensure_universal_control_deck_styles() -> None:
-    if not st.session_state.get("_universal_control_deck_styles_loaded"):
-        st.markdown(UNIVERSAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
-        st.session_state["_universal_control_deck_styles_loaded"] = True
-
-
 def render_operational_control_deck(container_data, sku_data) -> None:
     """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
     if not _requires_operational_control_deck(sku_data):
@@ -230,7 +226,6 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
-    _ensure_universal_control_deck_styles()
 
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
