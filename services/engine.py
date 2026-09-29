@@ -58,33 +58,6 @@ class WipEngine:
             ],
         )
 
-        self.containers["FT-01"] = ContainerState(
-            id="FT-01",
-            status=ContainerStatus.IN_PROGRESS_SHOPFLOOR,
-            zone="Aisle 2",
-            skus=[
-                self._sku_state(
-                    "CHOCO-BISCUITS-6PK",
-                    expected=12,
-                    cv_filled=6,
-                )
-            ],
-        )
-
-        self.containers["FT-03"] = ContainerState(
-            id="FT-03",
-            status=ContainerStatus.RETURNED_MIXED,
-            zone="Aisle 7",
-            skus=[
-                self._sku_state(
-                    "PERONI-12PK",
-                    expected=12,
-                    cv_filled=7,
-                    confirmed_backstock=5,
-                )
-            ],
-        )
-
         from services.simulator import seed_ft_04_fixture
 
         seed_ft_04_fixture(self)
@@ -241,7 +214,6 @@ class WipEngine:
                 [
                     "phantom_drift",
                     "cage_discrepancy",
-                    "cv_fill",
                     "delivery_cage_arrival",
                     "sku_variance",
                 ]
@@ -274,13 +246,6 @@ class WipEngine:
                         message="Delivery cage manifest mismatch detected during breakdown.",
                     )
                 )
-
-            elif scenario == "cv_fill":
-                container = self.containers.get("FT-01")
-                if container and container.skus:
-                    sku = container.skus[0]
-                    if not sku.is_resolved and sku.cv_filled < sku.expected:
-                        sku.cv_filled += 1
 
             elif scenario == "delivery_cage_arrival":
                 self._pending_delivery_cages = max(2, self._pending_delivery_cages - 1)

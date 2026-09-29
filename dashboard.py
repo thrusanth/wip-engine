@@ -278,74 +278,28 @@ def render_operational_control_deck(container_data, sku_data) -> None:
                 submit_resolution(container_id, sku, "partial", partial_qty)
 
 
-def _vision_confirmed_backstock_value(sku_data: dict) -> int:
-    if sku_data.get("is_resolved"):
-        return int(sku_data.get("recovered_units", sku_data.get("confirmed_backstock", 0)))
-    return int(sku_data.get("confirmed_backstock", 0))
-
-
-def render_flattop_task_card(container_data, sku_data, card_kind, card_key_prefix):
-    """Unified flattop card layout (Execution Telemetry + Vision Task): 2x2 metric grid."""
-    is_vision = card_kind.startswith("vision")
+def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
+    """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
     product_name = sku_data.get("name", sku_data["sku"])
-    card_title = "Vision Task" if is_vision else "Execution Telemetry"
 
-    st.subheader(f"{card_title}: {container_data['id']}")
+    st.subheader(f"Execution Telemetry: {container_data['id']}")
     st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
-    if is_vision:
-        st.markdown(
-            f"**SKU Profile:** `{sku_data['sku']}`  \n"
-            f"**EAN:** `{sku_data.get('ean', '')}`"
-        )
-    else:
-        st.markdown(
-            f"**SKU Profile:** {product_name}  \n"
-            f"`{sku_data['sku']}`  \n"
-            f"**EAN:** `{sku_data.get('ean', '')}`"
-        )
+    st.markdown(
+        f"**SKU Profile:** {product_name}  \n"
+        f"`{sku_data['sku']}`  \n"
+        f"**EAN:** `{sku_data.get('ean', '')}`"
+    )
 
     metrics_left, metrics_right = st.columns(2)
     with metrics_left:
         st.metric("Expected Quantity", sku_data["expected"])
-        if is_vision:
-            st.metric("Confirmed in Backstock", _vision_confirmed_backstock_value(sku_data))
-        else:
-            st.metric("Sent to Backstock", sku_data.get("backstock", 0))
+        st.metric("Sent to Backstock", sku_data.get("backstock", 0))
     with metrics_right:
-        if is_vision:
-            st.metric("CV Fill Events", sku_data["cv_filled"])
-            st.metric("Phantom Drift", 0)
-        else:
-            st.metric("Worked to Shelf", sku_data["worked"])
-            st.metric("Phantom Drift", sku_data["drift"])
+        st.metric("Worked to Shelf", sku_data["worked"])
+        st.metric("Phantom Drift", sku_data["drift"])
 
     st.markdown("---")
-
-    if is_vision and card_kind == "vision_ft01" and not sku_data.get("is_resolved"):
-        render_unaccounted_variance_metric(
-            sku_data, delta="-6 untracked", delta_color="inverse"
-        )
-    else:
-        render_unaccounted_variance_metric(sku_data)
-
-    if is_vision:
-        if sku_data.get("is_resolved"):
-            st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
-        elif card_kind == "vision_ft01":
-            if sku_data["variance"] > 0:
-                st.warning(
-                    f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units of {sku_data['sku']} are unaccounted for. "
-                    "System suspects untracked backstock routing."
-                )
-            else:
-                st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
-        elif sku_data["variance"] == 0:
-            st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
-        else:
-            st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
-        if _requires_operational_control_deck(sku_data):
-            render_operational_control_deck(container_data, sku_data)
-        return
+    render_unaccounted_variance_metric(sku_data)
 
     if sku_data["is_resolved"]:
         if sku_data["resolution_type"] == "all":
@@ -378,26 +332,18 @@ def render_flattop_task_card(container_data, sku_data, card_kind, card_key_prefi
 
 
 def build_flattop_card_grid(containers_dict):
-    """Ordered flattop cards (Execution Telemetry + Vision Task) for grid rendering."""
+    """Ordered Execution Telemetry flattop cards for grid rendering."""
     cards = []
 
     ft02 = containers_dict.get("FT-02")
     if ft02 and ft02.get("skus"):
-        cards.append(("execution", ft02, ft02["skus"][0], "ft2"))
-
-    ft01 = containers_dict.get("FT-01")
-    if ft01 and ft01.get("skus"):
-        cards.append(("vision_ft01", ft01, ft01["skus"][0], "ft1"))
-
-    ft03 = containers_dict.get("FT-03")
-    if ft03 and ft03.get("skus"):
-        cards.append(("vision_ft03", ft03, ft03["skus"][0], "ft3"))
+        cards.append((ft02, ft02["skus"][0], "ft2"))
 
     ft04 = containers_dict.get("FT-04")
     if ft04:
         for sku_data in ft04.get("skus", []):
             line_key = sku_data["sku"].replace("-", "_").lower()
-            cards.append(("execution", ft04, sku_data, f"ft4_{line_key}"))
+            cards.append((ft04, sku_data, f"ft4_{line_key}"))
 
     return cards
 
@@ -406,9 +352,9 @@ FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
 FLATTOP_CARDS_PER_ROW = 3
 
 
-def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
+def render_flattop_card(container_data, sku_data, key_prefix):
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        render_flattop_task_card(container_data, sku_data, card_kind, key_prefix)
+        render_execution_telemetry_card(container_data, sku_data, key_prefix)
 
 
 flattop_cards = build_flattop_card_grid(containers)
