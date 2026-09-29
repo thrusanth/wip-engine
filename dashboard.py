@@ -17,27 +17,27 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Target 1st column (All Found - Green) */
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(1) button {
+/* Target the 1st button column (Green) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button {
     background-color: #198754 !important; border-color: #198754 !important; color: #ffffff !important;
 }
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(1) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button:hover {
     background-color: #157347 !important; border-color: #146c43 !important;
 }
 
-/* Target 2nd column (Not Present - Red) */
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(2) button {
+/* Target the 2nd button column (Red) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button {
     background-color: #dc3545 !important; border-color: #dc3545 !important; color: #ffffff !important;
 }
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(2) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button:hover {
     background-color: #bb2d3b !important; border-color: #b02a37 !important;
 }
 
-/* Target 3rd column (Partial - Blue) */
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(3) button {
+/* Target the 3rd button column (Blue) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button {
     background-color: #0d6efd !important; border-color: #0d6efd !important; color: #ffffff !important;
 }
-div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(3) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button:hover {
     background-color: #0b5ed7 !important; border-color: #0a58ca !important;
 }
 </style>
@@ -222,12 +222,8 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(
-        '<div class="btn-deck-marker" style="display:none;"></div>',
-        unsafe_allow_html=True,
-    )
-    col_1, col_2, col_3 = st.columns(3)
-    with col_1:
+    ctrl_cols = st.columns(3)
+    with ctrl_cols[0]:
         if st.button(
             f"All Found ({units})",
             key=_operational_widget_key("all_found", container_id, sku),
@@ -235,7 +231,7 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         ):
             submit_resolution(container_id, sku, "all", units)
 
-    with col_2:
+    with ctrl_cols[1]:
         if st.button(
             "Not Present (0)",
             key=_operational_widget_key("not_present", container_id, sku),
@@ -243,7 +239,7 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         ):
             submit_resolution(container_id, sku, "none", 0)
 
-    with col_3:
+    with ctrl_cols[2]:
         if st.button(
             f"Partial ({units})",
             key=_operational_widget_key("partial", container_id, sku),
