@@ -14,55 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.markdown(
-    """
-<style>
-   /* Column 1: All Found (Green) - All states */
-   div[data-testid="column"]:nth-of-type(1) button {
-       background-color: #198754 !important;
-       border-color: #198754 !important;
-       color: #ffffff !important;
-   }
-   div[data-testid="column"]:nth-of-type(1) button:hover,
-   div[data-testid="column"]:nth-of-type(1) button:focus,
-   div[data-testid="column"]:nth-of-type(1) button:active {
-       background-color: #157347 !important;
-       border-color: #146c43 !important;
-       color: #ffffff !important;
-   }
-
-   /* Column 2: Not Present (Red) - All states */
-   div[data-testid="column"]:nth-of-type(2) button {
-       background-color: #dc3545 !important;
-       border-color: #dc3545 !important;
-       color: #ffffff !important;
-   }
-   div[data-testid="column"]:nth-of-type(2) button:hover,
-   div[data-testid="column"]:nth-of-type(2) button:focus,
-   div[data-testid="column"]:nth-of-type(2) button:active {
-       background-color: #bb2d3b !important;
-       border-color: #b02a37 !important;
-       color: #ffffff !important;
-   }
-
-   /* Column 3: Partial (Blue) - All states */
-   div[data-testid="column"]:nth-of-type(3) button {
-       background-color: #0d6efd !important;
-       border-color: #0d6efd !important;
-       color: #ffffff !important;
-   }
-   div[data-testid="column"]:nth-of-type(3) button:hover,
-   div[data-testid="column"]:nth-of-type(3) button:focus,
-   div[data-testid="column"]:nth-of-type(3) button:active {
-       background-color: #0b5ed7 !important;
-       border-color: #0a58ca !important;
-       color: #ffffff !important;
-   }
-</style>
-    """,
-    unsafe_allow_html=True,
-)
-
 # Main Title
 st.title("WIP Exception Engine")
 st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Detection")
@@ -207,35 +158,6 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-OPERATIONAL_CONTROL_DECK_STYLES = """
-<style>
-/* Column 1: All Found (Green) */
-div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(1) button {
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}
-
-/* Column 2: Not Present (Red) */
-div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(2) button {
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}
-
-/* Column 3: Partial (Blue) */
-div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(3) button {
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}
-</style>
-"""
-
-
 def _sku_widget_slug(sku: str) -> str:
     return sku.replace("-", "_").lower()
 
@@ -259,6 +181,7 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="control-deck">', unsafe_allow_html=True)
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
@@ -283,6 +206,8 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.get(partial_flag, False):
         st.warning("Partial recovery in progress — enter quantity recovered below.")
@@ -459,9 +384,47 @@ def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
             render_vision_task_ft03_card(container_data, sku_data)
 
 
-if not st.session_state.get("_operational_control_deck_styles_loaded"):
-    st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
-    st.session_state["_operational_control_deck_styles_loaded"] = True
+def _control_deck_button_selectors(column_index: int) -> list[str]:
+    """Streamlit renders st.columns as a sibling block after the marker div, not inside it."""
+    nested = f'div.control-deck div[data-testid="column"]:nth-of-type({column_index}) button'
+    adjacent = (
+        f'div[data-testid="stMarkdownContainer"]:has(.control-deck)'
+        f' + div[data-testid="stHorizontalBlock"]'
+        f' > div[data-testid="column"]:nth-of-type({column_index}) button'
+    )
+    return [nested, adjacent]
+
+
+def _control_deck_button_styles(column_index: int, bg: str) -> str:
+    selectors = _control_deck_button_selectors(column_index)
+    rule = (
+        f"    background-color: {bg} !important;\n"
+        f"    border-color: {bg} !important;\n"
+        f"    color: #ffffff !important;"
+    )
+    base_block = ",\n".join(selectors) + f" {{\n{rule}\n}}"
+    state_selectors = [
+        f"{selector}:{pseudo}"
+        for pseudo in ("hover", "focus", "focus-visible", "active")
+        for selector in selectors
+    ]
+    state_block = ",\n".join(state_selectors) + f" {{\n{rule}\n}}"
+    return f"{base_block}\n{state_block}"
+
+
+st.markdown(
+    f"""
+<style>
+/* Scope strictly to the control deck container */
+{_control_deck_button_styles(1, "#198754")}
+
+{_control_deck_button_styles(2, "#dc3545")}
+
+{_control_deck_button_styles(3, "#0d6efd")}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
 
 flattop_cards = build_flattop_card_grid(containers)
 for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
