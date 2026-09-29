@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from uuid import uuid4
 
 # ---------------------------------------------------------
 # Enums
@@ -19,18 +21,35 @@ class ResolutionType(str, Enum):
     NONE = "none"
     PARTIAL = "partial"
 
+
+class ExceptionKind(str, Enum):
+    """Category of live inventory execution anomaly."""
+    PHANTOM_DRIFT = "phantom_drift"
+    CAGE_DISCREPANCY = "cage_discrepancy"
+    SKU_VARIANCE = "sku_variance"
+    UNTRACKED_BACKSTOCK = "untracked_backstock"
+
 # ---------------------------------------------------------
 # Core Domain Models
 # ---------------------------------------------------------
+def _validate_ean13(value: str) -> str:
+    if len(value) != 13 or not value.isdigit():
+        raise ValueError("EAN must be a 13-digit numeric barcode")
+    return value
+
+
 class SkuState(BaseModel):
     """The state of a specific SKU within a container."""
     sku: str
+    name: str = ""
+    ean: str = ""
     expected: int
     worked: int = 0
     backstock: int = 0
     confirmed_backstock: int = 0
     cv_filled: int = 0
-    
+    price: Optional[float] = None
+
     # Computed fields (these will be enriched by the engine before returning)
     drift: int = 0
     variance: int = 0
@@ -39,6 +58,14 @@ class SkuState(BaseModel):
     recovered_units: int = 0
     shrink_confirmed: int = 0
 
+    @field_validator("ean")
+    @classmethod
+    def validate_ean(cls, value: str) -> str:
+        if not value:
+            return value
+        return _validate_ean13(value)
+
+
 class ContainerState(BaseModel):
     """The overall state of a physical container on the shop floor."""
     id: str
@@ -46,6 +73,27 @@ class ContainerState(BaseModel):
     zone: str
     skus: List[SkuState]
     is_pending: bool = False
+
+
+class ActiveException(BaseModel):
+    """A live exception surfaced by telemetry or the background simulator."""
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    kind: ExceptionKind
+    container_id: str
+    sku: str
+    ean: str = ""
+    zone: str
+    units: int = Field(..., ge=0)
+    message: str
+    detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("ean")
+    @classmethod
+    def validate_ean(cls, value: str) -> str:
+        if not value:
+            return value
+        return _validate_ean13(value)
+
 
 # ---------------------------------------------------------
 # Event Models (Input)
@@ -72,3 +120,4 @@ class TelemetryResponse(BaseModel):
     """The full payload returned to the frontend."""
     metrics: GlobalMetrics
     containers: Dict[str, ContainerState]
+    active_exceptions: List[ActiveException] = Field(default_factory=list)
