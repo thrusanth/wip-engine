@@ -201,10 +201,14 @@ def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> 
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    if not st.session_state.get("_phantom_resolution_button_styles_loaded"):
+    if not st.session_state.get("_phantom_resolution_button_styles_v2_loaded"):
         st.markdown(PHANTOM_RESOLUTION_BUTTON_STYLES, unsafe_allow_html=True)
-        st.session_state["_phantom_resolution_button_styles_loaded"] = True
+        st.session_state["_phantom_resolution_button_styles_v2_loaded"] = True
 
+    st.markdown(
+        '<span class="phantom-resolution-btn-row" aria-hidden="true"></span>',
+        unsafe_allow_html=True,
+    )
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
