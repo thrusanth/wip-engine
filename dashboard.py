@@ -17,27 +17,27 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Target Column 1 (All Found - Green) - ONLY in 3-column blocks */
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(1) button {
+/* Target Column 1 (All Found - Green) - ONLY innermost horizontal blocks */
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) button {
     background-color: #198754 !important; border-color: #198754 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(1) button:hover {
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) button:hover {
     background-color: #157347 !important; border-color: #146c43 !important;
 }
 
-/* Target Column 2 (Not Present - Red) - ONLY in 3-column blocks */
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(2) button {
+/* Target Column 2 (Not Present - Red) - ONLY innermost horizontal blocks */
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) button {
     background-color: #dc3545 !important; border-color: #dc3545 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(2) button:hover {
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) button:hover {
     background-color: #bb2d3b !important; border-color: #b02a37 !important;
 }
 
-/* Target Column 3 (Partial - Blue) - ONLY in 3-column blocks */
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(3) button {
+/* Target Column 3 (Partial - Blue) - ONLY innermost horizontal blocks */
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) button {
     background-color: #0d6efd !important; border-color: #0d6efd !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div:nth-child(3) button:hover {
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) button:hover {
     background-color: #0b5ed7 !important; border-color: #0a58ca !important;
 }
 </style>
@@ -359,10 +359,10 @@ def render_execution_telemetry_card(task: dict) -> None:
 
 tasks = build_tasks(containers)
 
-# Create a 2-column grid for the dashboard layout
-grid_cols = st.columns(2)
+# Create a 3-column grid for a more compact dashboard layout
+grid_cols = st.columns(3)
 
 for index, task in enumerate(tasks):
-    # Alternate cards between the left and right columns
-    with grid_cols[index % 2]:
+    # Alternate cards across the 3 columns
+    with grid_cols[index % 3]:
         render_execution_telemetry_card(task)
