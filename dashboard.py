@@ -158,31 +158,46 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-OPERATIONAL_CONTROL_DECK_STYLES = """
+_TELEMETRY_DECK_ROW = (
+    'div[data-testid="stMarkdownContainer"]:has(.telemetry-control-deck)'
+    ' + div[data-testid="stHorizontalBlock"]'
+)
+
+
+TELEMETRY_CONTROL_DECK_STYLES = f"""
 <style>
-/* Column 1: All Found (Green) */
-div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(1) button {
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(1) button,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(1) button {{
     background-color: #198754 !important;
     border-color: #198754 !important;
     color: #ffffff !important;
-}
+}}
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(1) button:hover,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(1) button:hover {{
+    background-color: #157347 !important;
+}}
 
-/* Column 2: Not Present (Red) */
-div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(2) button {
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(2) button,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(2) button {{
     background-color: #dc3545 !important;
     border-color: #dc3545 !important;
     color: #ffffff !important;
-}
+}}
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(2) button:hover,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(2) button:hover {{
+    background-color: #bb2d3b !important;
+}}
 
-/* Column 3: Partial (Blue) */
-div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(3) button {
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(3) button,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(3) button {{
     background-color: #0d6efd !important;
     border-color: #0d6efd !important;
     color: #ffffff !important;
-}
+}}
+.telemetry-control-deck div[data-testid="column"]:nth-of-type(3) button:hover,
+{_TELEMETRY_DECK_ROW} > div[data-testid="column"]:nth-of-type(3) button:hover {{
+    background-color: #0b5ed7 !important;
+}}
 </style>
 """
 
@@ -206,7 +221,18 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def render_operational_control_deck(container_data, sku_data) -> None:
+def _ensure_telemetry_control_deck_styles() -> None:
+    if not st.session_state.get("_telemetry_control_deck_styles_loaded"):
+        st.markdown(TELEMETRY_CONTROL_DECK_STYLES, unsafe_allow_html=True)
+        st.session_state["_telemetry_control_deck_styles_loaded"] = True
+
+
+def render_operational_control_deck(
+    container_data,
+    sku_data,
+    *,
+    telemetry_styled: bool = False,
+) -> None:
     """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
     if not _requires_operational_control_deck(sku_data):
         return
@@ -220,9 +246,10 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if not st.session_state.get("_operational_control_deck_styles_loaded"):
-        st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
-        st.session_state["_operational_control_deck_styles_loaded"] = True
+    if telemetry_styled:
+        _ensure_telemetry_control_deck_styles()
+        st.markdown('<div class="telemetry-control-deck">', unsafe_allow_html=True)
+
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
@@ -247,6 +274,9 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    if telemetry_styled:
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.get(partial_flag, False):
         st.warning("Partial recovery in progress — enter quantity recovered below.")
@@ -320,7 +350,9 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
                 f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
             )
         if _requires_operational_control_deck(sku_data):
-            render_operational_control_deck(container_data, sku_data)
+            render_operational_control_deck(
+                container_data, sku_data, telemetry_styled=True
+            )
 
 
 def render_vision_task_ft01_card(container_data, sku_data):
