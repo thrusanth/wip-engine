@@ -158,60 +158,54 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-OPERATIONAL_CONTROL_DECK_STYLES = """
-<style>
-.btn-green-col button,
-div[data-testid="column"]:has(.btn-green-col) button {
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}
-.btn-green-col button:hover,
-.btn-green-col button:focus,
-.btn-green-col button:active,
-div[data-testid="column"]:has(.btn-green-col) button:hover,
-div[data-testid="column"]:has(.btn-green-col) button:focus,
-div[data-testid="column"]:has(.btn-green-col) button:active {
-    background-color: #157347 !important;
-    border-color: #146c43 !important;
-    color: #ffffff !important;
-}
+_CONTROL_DECK_PANEL_CLASS = "control-deck-panel"
+_CONTROL_DECK_STYLE_COLUMNS = (
+    ("btn-green-col", 1, "#198754", "#157347", "#146c43"),
+    ("btn-red-col", 2, "#dc3545", "#bb2d3b", "#b02a37"),
+    ("btn-blue-col", 3, "#0d6efd", "#0b5ed7", "#0a58ca"),
+)
 
-.btn-red-col button,
-div[data-testid="column"]:has(.btn-red-col) button {
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}
-.btn-red-col button:hover,
-.btn-red-col button:focus,
-.btn-red-col button:active,
-div[data-testid="column"]:has(.btn-red-col) button:hover,
-div[data-testid="column"]:has(.btn-red-col) button:focus,
-div[data-testid="column"]:has(.btn-red-col) button:active {
-    background-color: #bb2d3b !important;
-    border-color: #b02a37 !important;
-    color: #ffffff !important;
-}
 
-.btn-blue-col button,
-div[data-testid="column"]:has(.btn-blue-col) button {
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}
-.btn-blue-col button:hover,
-.btn-blue-col button:focus,
-.btn-blue-col button:active,
-div[data-testid="column"]:has(.btn-blue-col) button:hover,
-div[data-testid="column"]:has(.btn-blue-col) button:focus,
-div[data-testid="column"]:has(.btn-blue-col) button:active {
-    background-color: #0b5ed7 !important;
-    border-color: #0a58ca !important;
-    color: #ffffff !important;
-}
-</style>
-"""
+def _control_deck_row_button_selector(column_index: int) -> str:
+    """Target only the 3-button row immediately after a control-deck panel marker."""
+    return (
+        f'div[data-testid="stMarkdownContainer"]:has(.{_CONTROL_DECK_PANEL_CLASS})'
+        f' + div[data-testid="stHorizontalBlock"]'
+        f' > div[data-testid="column"]:nth-child({column_index}) button'
+    )
+
+
+def _build_control_deck_styles() -> str:
+    chunks = ["<style>"]
+    for wrapper_class, column_index, base_bg, hover_bg, hover_border in _CONTROL_DECK_STYLE_COLUMNS:
+        row_selector = _control_deck_row_button_selector(column_index)
+        wrapper_selector = f'div[data-testid="column"]:has(.{wrapper_class}) button'
+        base_selectors = f".{wrapper_class} button,\n{row_selector},\n{wrapper_selector}"
+        base_rule = (
+            f"background-color: {base_bg} !important; "
+            f"border-color: {base_bg} !important; "
+            f"color: #ffffff !important;"
+        )
+        chunks.append(f"{base_selectors} {{\n    {base_rule}\n}}")
+        hover_rule = (
+            f"background-color: {hover_bg} !important; "
+            f"border-color: {hover_border} !important; "
+            f"color: #ffffff !important;"
+        )
+        for pseudo in ("hover", "focus", "active"):
+            state_selectors = ",\n".join(
+                [
+                    f".{wrapper_class} button:{pseudo}",
+                    f"{row_selector}:{pseudo}",
+                    f"{wrapper_selector}:{pseudo}",
+                ]
+            )
+            chunks.append(f"{state_selectors} {{\n    {hover_rule}\n}}")
+    chunks.append("</style>")
+    return "\n".join(chunks)
+
+
+CONTROL_DECK_STYLES = _build_control_deck_styles()
 
 
 def _sku_widget_slug(sku: str) -> str:
@@ -233,8 +227,14 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def render_operational_control_deck(container_data, sku_data) -> None:
-    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+def _ensure_control_deck_styles_loaded() -> None:
+    if not st.session_state.get("_control_deck_styles_loaded"):
+        st.markdown(CONTROL_DECK_STYLES, unsafe_allow_html=True)
+        st.session_state["_control_deck_styles_loaded"] = True
+
+
+def render_control_deck(container_data, sku_data) -> None:
+    """Self-contained 3-button deck (Telemetry + Vision). Independent of card metric columns."""
     if not _requires_operational_control_deck(sku_data):
         return
 
@@ -247,9 +247,12 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if not st.session_state.get("_operational_control_deck_styles_loaded"):
-        st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
-        st.session_state["_operational_control_deck_styles_loaded"] = True
+    _ensure_control_deck_styles_loaded()
+    st.markdown(
+        f'<div class="{_CONTROL_DECK_PANEL_CLASS}"></div>',
+        unsafe_allow_html=True,
+    )
+
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         st.markdown('<div class="btn-green-col">', unsafe_allow_html=True)
@@ -352,8 +355,7 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
                 "✅ **Fully accounted:** Case split matches telemetry "
                 f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
             )
-        if _requires_operational_control_deck(sku_data):
-            render_operational_control_deck(container_data, sku_data)
+        render_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft01_card(container_data, sku_data):
@@ -388,8 +390,7 @@ def render_vision_task_ft01_card(container_data, sku_data):
             )
         else:
             st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
-        if _requires_operational_control_deck(sku_data):
-            render_operational_control_deck(container_data, sku_data)
+        render_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft03_card(container_data, sku_data):
@@ -415,8 +416,7 @@ def render_vision_task_ft03_card(container_data, sku_data):
         st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
     else:
         st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
-    if _requires_operational_control_deck(sku_data):
-        render_operational_control_deck(container_data, sku_data)
+    render_control_deck(container_data, sku_data)
 
 
 def build_flattop_card_grid(containers_dict):
