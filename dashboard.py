@@ -99,9 +99,6 @@ with col5:
     else:
         st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
-# Visual Divider
-st.divider()
-
 active_exceptions = telemetry_data.get("active_exceptions", []) if telemetry_data else []
 
 telemetry_rows = []
