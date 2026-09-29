@@ -158,46 +158,6 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-def inject_phantom_resolution_button_styles() -> None:
-    st.markdown(
-        """
-<style>
-div[class*="st-key-"][class$="_all"] button {
-  background-color: #16a34a !important;
-  color: #ffffff !important;
-  border: 1px solid #15803d !important;
-}
-div[class*="st-key-"][class$="_all"] button:hover {
-  background-color: #15803d !important;
-  border-color: #166534 !important;
-  color: #ffffff !important;
-}
-div[class*="st-key-"][class$="_none"] button {
-  background-color: #dc2626 !important;
-  color: #ffffff !important;
-  border: 1px solid #b91c1c !important;
-}
-div[class*="st-key-"][class$="_none"] button:hover {
-  background-color: #b91c1c !important;
-  border-color: #991b1b !important;
-  color: #ffffff !important;
-}
-div[class*="st-key-"][class$="_partial"] button {
-  background-color: #2563eb !important;
-  color: #ffffff !important;
-  border: 1px solid #1d4ed8 !important;
-}
-div[class*="st-key-"][class$="_partial"] button:hover {
-  background-color: #1d4ed8 !important;
-  border-color: #1e40af !important;
-  color: #ffffff !important;
-}
-</style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
     """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
     prefix = card_key_prefix
@@ -238,6 +198,62 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
             f"'{product_name}' are missing and completely unaccounted for in system telemetry."
         )
         st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            """
+<div class="phantom-resolution-action-styles" style="display:none"></div>
+<style>
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(1)
+  div.stButton > button {
+  background: #198754 !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(1)
+  div.stButton > button:hover {
+  background: #157347 !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(2)
+  div.stButton > button {
+  background: #dc3545 !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(2)
+  div.stButton > button:hover {
+  background: #bb2d3b !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(3)
+  div.stButton > button {
+  background: #0d6efd !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-action-styles)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(3)
+  div.stButton > button:hover {
+  background: #0b5ed7 !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+</style>
+            """,
+            unsafe_allow_html=True,
+        )
         col_1, col_2, col_3 = st.columns(3)
         with col_1:
             if st.button(
@@ -402,8 +418,6 @@ def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
         elif card_kind == "vision_ft03":
             render_vision_task_ft03_card(container_data, sku_data)
 
-
-inject_phantom_resolution_button_styles()
 
 flattop_cards = build_flattop_card_grid(containers)
 for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
