@@ -139,9 +139,6 @@ st.divider()
 # ---------------------------------------------------------
 # Main Content Sections
 # ---------------------------------------------------------
-FLATTOP_CARD_HEIGHT = 620
-
-
 def _unaccounted_variance_value(sku_data: dict) -> int:
     if sku_data.get("is_resolved"):
         return 0
@@ -167,7 +164,7 @@ left_col, middle_col, right_col = st.columns(3)
 # LEFT COLUMN: Scenario 1 - The Chaotic Frontline (FT-02)
 # ==========================================
 with left_col:
-    with st.container(border=True, height=FLATTOP_CARD_HEIGHT):
+    with st.container(border=True):
         ft2_data = containers.get("FT-02")
         if ft2_data:
             sku_data = ft2_data["skus"][0]
@@ -236,7 +233,7 @@ with left_col:
 # MIDDLE COLUMN: Scenario 2 - Blind Spot Detection (FT-01)
 # ==========================================
 with middle_col:
-    with st.container(border=True, height=FLATTOP_CARD_HEIGHT):
+    with st.container(border=True):
         ft1_data = containers.get("FT-01")
         if ft1_data:
             sku_data = ft1_data["skus"][0]
@@ -253,16 +250,11 @@ with middle_col:
             
             with metrics_c3:
                 st.metric("Expected Quantity", sku_data["expected"])
-                st.metric("Sent to Backstock", sku_data.get("backstock", 0))
 
             with metrics_c4:
                 st.metric("CV Fill Events", sku_data["cv_filled"])
-                confirmed_backstock = (
-                    sku_data.get("recovered_units", 0)
-                    if sku_data["is_resolved"]
-                    else sku_data.get("confirmed_backstock", 0)
-                )
-                st.metric("Confirmed in Backstock", confirmed_backstock)
+                if sku_data["is_resolved"]:
+                    st.metric("Confirmed in Backstock", sku_data["recovered_units"])
 
             st.markdown("---")
 
@@ -293,7 +285,7 @@ with middle_col:
 # RIGHT COLUMN: Scenario 3 - High Value Fast-Moving SKU (FT-03)
 # ==========================================
 with right_col:
-    with st.container(border=True, height=FLATTOP_CARD_HEIGHT):
+    with st.container(border=True):
         ft3_data = containers.get("FT-03")
         if ft3_data:
             sku_data = ft3_data["skus"][0]
@@ -310,7 +302,6 @@ with right_col:
             
             with metrics_c5:
                 st.metric("Expected Quantity", sku_data["expected"])
-                st.metric("Sent to Backstock", sku_data.get("backstock", 0))
 
             with metrics_c6:
                 st.metric("CV Fill Events", sku_data["cv_filled"])
@@ -338,7 +329,7 @@ def render_inventory_line_card(
     prefix = f"{card_key_prefix}_{line_key}"
     product_name = sku_data.get("name", sku_data["sku"])
 
-    with st.container(border=True, height=FLATTOP_CARD_HEIGHT):
+    with st.container(border=True):
         st.subheader(f"{card_title_prefix}: {container_data['id']}")
         st.caption(
             f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}"
