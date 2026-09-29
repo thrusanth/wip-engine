@@ -313,7 +313,7 @@ def render_vision_task_ft03_card(container_data, sku_data):
 
 
 def build_flattop_card_grid(containers_dict):
-    """Ordered flattop cards for a single equal-width column grid."""
+    """Ordered flattop cards (Execution Telemetry + Vision Task) for grid rendering."""
     cards = []
 
     ft02 = containers_dict.get("FT-02")
