@@ -158,7 +158,7 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-PHANTOM_RESOLUTION_BUTTON_STYLES = """
+OPERATIONAL_CONTROL_DECK_STYLES = """
 <style>
 /* Column 1: All Found (Green) */
 div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
@@ -187,35 +187,50 @@ div[data-testid="column"]:nth-of-type(3) button {
 """
 
 
-def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> None:
-    """Colored primary buttons for phantom drift resolution (single action row)."""
-    drift = sku_data["drift"]
-    partial_flag = f"{prefix}_show_partial"
+def _sku_widget_slug(sku: str) -> str:
+    return sku.replace("-", "_").lower()
+
+
+def _operational_widget_key(action: str, container_id: str, sku: str) -> str:
+    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
+
+
+def _outstanding_units(sku_data: dict) -> int:
+    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
+
+
+def render_operational_control_deck(container_data, sku_data) -> None:
+    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+    container_id = container_data["id"]
+    sku = sku_data["sku"]
+    units = _outstanding_units(sku_data)
+    partial_flag = _operational_widget_key("show_partial", container_id, sku)
+
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    st.markdown(PHANTOM_RESOLUTION_BUTTON_STYLES, unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
-            f"All Found ({drift})",
-            key=f"{prefix}_all",
+            f"All Found ({units})",
+            key=_operational_widget_key("all_found", container_id, sku),
             use_container_width=True,
         ):
-            submit_resolution(container_data["id"], sku_data["sku"], "all", drift)
+            submit_resolution(container_id, sku, "all", units)
 
     with col_2:
         if st.button(
             "Not Present (0)",
-            key=f"{prefix}_none",
+            key=_operational_widget_key("not_present", container_id, sku),
             use_container_width=True,
         ):
-            submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
+            submit_resolution(container_id, sku, "none", 0)
 
     with col_3:
         if st.button(
-            f"Partial ({drift})",
-            key=f"{prefix}_partial",
+            f"Partial ({units})",
+            key=_operational_widget_key("partial", container_id, sku),
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
@@ -224,28 +239,26 @@ def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> 
         st.warning("Partial recovery in progress — enter quantity recovered below.")
         partial_col1, partial_col2 = st.columns([2, 1])
         with partial_col1:
-            max_partial = max(1, drift - 1)
+            max_partial = max(1, units - 1) if units > 1 else 1
             partial_qty = st.number_input(
                 "Quantity Recovered?",
                 min_value=1,
                 max_value=max_partial,
                 value=1,
-                key=f"{prefix}_partial_qty",
+                key=_operational_widget_key("partial_qty", container_id, sku),
             )
         with partial_col2:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Confirm Partial", type="primary", key=f"{prefix}_confirm_partial"):
-                submit_resolution(
-                    container_data["id"],
-                    sku_data["sku"],
-                    "partial",
-                    partial_qty,
-                )
+            if st.button(
+                "Confirm Partial",
+                type="primary",
+                key=_operational_widget_key("confirm_partial", container_id, sku),
+            ):
+                submit_resolution(container_id, sku, "partial", partial_qty)
 
 
 def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
     """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
-    prefix = card_key_prefix
     product_name = sku_data.get("name", sku_data["sku"])
 
     st.subheader(f"Execution Telemetry: {container_data['id']}")
@@ -277,23 +290,23 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
                 f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
                 f"{sku_data['shrink_confirmed']} confirmed as shrink."
             )
-    elif sku_data["drift"] > 0:
-        st.warning(
-            f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-            f"'{product_name}' are missing and completely unaccounted for in system telemetry."
-        )
-        st.markdown("<br>", unsafe_allow_html=True)
-        render_phantom_resolution_actions(container_data, sku_data, prefix)
-    elif sku_data.get("variance", 0) > 0:
-        st.warning(
-            f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
-            "System suspects untracked backstock routing."
-        )
     else:
-        st.success(
-            "✅ **Fully accounted:** Case split matches telemetry "
-            f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
-        )
+        if sku_data["drift"] > 0:
+            st.warning(
+                f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
+                f"'{product_name}' are missing and completely unaccounted for in system telemetry."
+            )
+        elif sku_data.get("variance", 0) > 0:
+            st.warning(
+                f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
+                "System suspects untracked backstock routing."
+            )
+        else:
+            st.success(
+                "✅ **Fully accounted:** Case split matches telemetry "
+                f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+            )
+        render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft01_card(container_data, sku_data):
@@ -321,23 +334,14 @@ def render_vision_task_ft01_card(container_data, sku_data):
         render_unaccounted_variance_metric(
             sku_data, delta="-6 untracked", delta_color="inverse"
         )
-        st.markdown("<br>", unsafe_allow_html=True)
-
         if sku_data["variance"] > 0:
             st.warning(
                 f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units of {sku_data['sku']} are unaccounted for. "
                 "System suspects untracked backstock routing."
             )
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
-                f"Confirm {sku_data['variance']} Units in Backstock",
-                type="primary",
-                use_container_width=True,
-                key="ft1_confirm_backstock",
-            ):
-                submit_resolution(container_data["id"], sku_data["sku"], "all", sku_data["variance"])
         else:
             st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
+        render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft03_card(container_data, sku_data):
@@ -357,10 +361,14 @@ def render_vision_task_ft03_card(container_data, sku_data):
 
     st.markdown("---")
     render_unaccounted_variance_metric(sku_data)
-    if sku_data["variance"] == 0:
+    if sku_data.get("is_resolved"):
+        st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
+    elif sku_data["variance"] == 0:
         st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
     else:
         st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
+    if not sku_data.get("is_resolved"):
+        render_operational_control_deck(container_data, sku_data)
 
 
 def build_flattop_card_grid(containers_dict):
@@ -401,6 +409,10 @@ def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
         elif card_kind == "vision_ft03":
             render_vision_task_ft03_card(container_data, sku_data)
 
+
+if not st.session_state.get("_operational_control_deck_styles_loaded"):
+    st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
+    st.session_state["_operational_control_deck_styles_loaded"] = True
 
 flattop_cards = build_flattop_card_grid(containers)
 for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
