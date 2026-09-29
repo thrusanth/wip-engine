@@ -17,37 +17,28 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Target Column 1 (All Found - Green) by counting 3rd from the end */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(3) button {
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
+/* Target 1st column (All Found - Green) */
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(1) button {
+    background-color: #198754 !important; border-color: #198754 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(3) button:hover {
-    background-color: #157347 !important;
-    border-color: #146c43 !important;
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(1) button:hover {
+    background-color: #157347 !important; border-color: #146c43 !important;
 }
 
-/* Target Column 2 (Not Present - Red) by counting 2nd from the end */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(2) button {
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
+/* Target 2nd column (Not Present - Red) */
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(2) button {
+    background-color: #dc3545 !important; border-color: #dc3545 !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(2) button:hover {
-    background-color: #bb2d3b !important;
-    border-color: #b02a37 !important;
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(2) button:hover {
+    background-color: #bb2d3b !important; border-color: #b02a37 !important;
 }
 
-/* Target Column 3 (Partial - Blue) by counting 1st from the end */
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(1) button {
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
+/* Target 3rd column (Partial - Blue) */
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(3) button {
+    background-color: #0d6efd !important; border-color: #0d6efd !important; color: #ffffff !important;
 }
-div[data-testid="stHorizontalBlock"]:has(button) > div:nth-last-child(1) button:hover {
-    background-color: #0b5ed7 !important;
-    border-color: #0a58ca !important;
+div[data-testid="element-container"]:has(.btn-deck-marker) + div[data-testid="element-container"] div[data-testid="column"]:nth-child(3) button:hover {
+    background-color: #0b5ed7 !important; border-color: #0a58ca !important;
 }
 </style>
     """,
@@ -231,7 +222,10 @@ def render_operational_control_deck(container_data, sku_data) -> None:
         st.session_state[partial_flag] = False
 
     st.markdown("<br>", unsafe_allow_html=True)
-
+    st.markdown(
+        '<div class="btn-deck-marker" style="display:none;"></div>',
+        unsafe_allow_html=True,
+    )
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
