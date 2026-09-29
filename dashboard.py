@@ -199,8 +199,18 @@ def _outstanding_units(sku_data: dict) -> int:
     return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
 
 
+def _requires_operational_control_deck(sku_data: dict) -> bool:
+    """True when the SKU still has phantom drift or unaccounted variance to resolve."""
+    if sku_data.get("is_resolved"):
+        return False
+    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
+
+
 def render_operational_control_deck(container_data, sku_data) -> None:
     """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+    if not _requires_operational_control_deck(sku_data):
+        return
+
     container_id = container_data["id"]
     sku = sku_data["sku"]
     units = _outstanding_units(sku_data)
@@ -309,7 +319,8 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
                 "✅ **Fully accounted:** Case split matches telemetry "
                 f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
             )
-        render_operational_control_deck(container_data, sku_data)
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft01_card(container_data, sku_data):
@@ -344,7 +355,8 @@ def render_vision_task_ft01_card(container_data, sku_data):
             )
         else:
             st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
-        render_operational_control_deck(container_data, sku_data)
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft03_card(container_data, sku_data):
@@ -370,7 +382,7 @@ def render_vision_task_ft03_card(container_data, sku_data):
         st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
     else:
         st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
-    if not sku_data.get("is_resolved"):
+    if _requires_operational_control_deck(sku_data):
         render_operational_control_deck(container_data, sku_data)
 
 
