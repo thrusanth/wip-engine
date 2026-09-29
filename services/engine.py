@@ -58,6 +58,20 @@ class WipEngine:
             ],
         )
 
+        self.containers["FT-03"] = ContainerState(
+            id="FT-03",
+            status=ContainerStatus.ABANDONED_MID_SHIFT,
+            zone="Aisle 9",
+            skus=[
+                self._sku_state(
+                    "ORANGE-SODA-8PK",
+                    expected=8,
+                    worked=6,
+                    backstock=0,
+                )
+            ],
+        )
+
         with self._lock:
             self._recalculate_all()
             self._sync_active_exceptions()
