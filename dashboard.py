@@ -1,6 +1,8 @@
-import streamlit as st
-import requests
 import os
+
+import pandas as pd
+import requests
+import streamlit as st
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
 API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
@@ -130,14 +132,22 @@ for exc in active_exceptions:
         }
     )
 
-st.subheader("Live Execution Telemetry")
-st.dataframe(telemetry_rows, use_container_width=True, hide_index=True)
+tab1, tab2 = st.tabs(["System Overview", "Telemetry & Exceptions"])
 
-if exception_rows:
-    st.subheader("Active Telemetry Exceptions")
-    st.dataframe(exception_rows, use_container_width=True, hide_index=True)
+with tab1:
+    st.markdown(
+        "High-level operational charts and trend summaries will appear here. "
+        "Use the flattop execution cards below for live reconciliation workflows."
+    )
 
-# Visual Divider
+with tab2:
+    st.subheader("Live Execution Telemetry")
+    st.dataframe(telemetry_rows, use_container_width=True, hide_index=True)
+
+    if exception_rows:
+        st.subheader("Active Telemetry Exceptions")
+        st.dataframe(exception_rows, use_container_width=True, hide_index=True)
+
 st.divider()
 
 # ---------------------------------------------------------
