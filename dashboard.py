@@ -202,39 +202,27 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
             """
 <style>
 /* Green Button (All Found) */
-div[data-testid="column"]:nth-of-type(1) div[data-testid="stButton"] button {
+div[data-testid="column"]:nth-of-type(1) [data-baseweb="button"] {
     background-color: #198754 !important;
+    background: #198754 !important;
     color: #ffffff !important;
-    border: 1px solid #198754 !important;
-}
-div[data-testid="column"]:nth-of-type(1) div[data-testid="stButton"] button:hover {
-    background-color: #157347 !important;
-    color: #ffffff !important;
-    border-color: #146c43 !important;
+    border-color: #198754 !important;
 }
 
 /* Red Button (Not Present) */
-div[data-testid="column"]:nth-of-type(2) div[data-testid="stButton"] button {
+div[data-testid="column"]:nth-of-type(2) [data-baseweb="button"] {
     background-color: #dc3545 !important;
+    background: #dc3545 !important;
     color: #ffffff !important;
-    border: 1px solid #dc3545 !important;
-}
-div[data-testid="column"]:nth-of-type(2) div[data-testid="stButton"] button:hover {
-    background-color: #bb2d3b !important;
-    color: #ffffff !important;
-    border-color: #b02a37 !important;
+    border-color: #dc3545 !important;
 }
 
 /* Blue Button (Partial) */
-div[data-testid="column"]:nth-of-type(3) div[data-testid="stButton"] button {
+div[data-testid="column"]:nth-of-type(3) [data-baseweb="button"] {
     background-color: #0d6efd !important;
+    background: #0d6efd !important;
     color: #ffffff !important;
-    border: 1px solid #0d6efd !important;
-}
-div[data-testid="column"]:nth-of-type(3) div[data-testid="stButton"] button:hover {
-    background-color: #0b5ed7 !important;
-    color: #ffffff !important;
-    border-color: #0a58ca !important;
+    border-color: #0d6efd !important;
 }
 </style>
             """,
