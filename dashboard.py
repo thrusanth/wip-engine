@@ -158,33 +158,52 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-OPERATIONAL_CONTROL_DECK_STYLES = """
-<style>
-/* Column 1: All Found (Green) */
-div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(1) button {
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}
+_CONTROL_DECK_ANCHOR_CLASS = "operational-control-deck-anchor"
+_CONTROL_DECK_COLUMN_COLORS = (
+    "#198754",  # 1 — All Found (green)
+    "#dc3545",  # 2 — Not Present (red)
+    "#0d6efd",  # 3 — Partial (blue)
+)
 
-/* Column 2: Not Present (Red) */
-div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(2) button {
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}
 
-/* Column 3: Partial (Blue) */
-div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
-div[data-testid="column"]:nth-of-type(3) button {
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}
-</style>
-"""
+def _control_deck_row_button_selectors(column_index: int) -> list[str]:
+    """Only the 3-button row immediately after each control-deck anchor (Telemetry + Vision)."""
+    anchor_row = (
+        f'div[data-testid="stMarkdownContainer"]:has(.{_CONTROL_DECK_ANCHOR_CLASS})'
+        f' + div[data-testid="stHorizontalBlock"]'
+    )
+    return [
+        f'{anchor_row} > div[data-testid="column"]:nth-child({column_index}) button',
+        f'{anchor_row} > div:nth-child({column_index}) button[kind="secondary"]',
+        f'{anchor_row} > div:nth-child({column_index}) button[data-testid="stBaseButton-secondary"]',
+    ]
+
+
+def _build_operational_control_deck_styles() -> str:
+    chunks: list[str] = ["<style>"]
+    for column_index, color in enumerate(_CONTROL_DECK_COLUMN_COLORS, start=1):
+        selectors = _control_deck_row_button_selectors(column_index)
+        declaration = (
+            f"background-color: {color} !important; "
+            f"border-color: {color} !important; "
+            f"color: #ffffff !important;"
+        )
+        base = ",\n".join(selectors)
+        chunks.append(f"/* Control deck column {column_index} */")
+        chunks.append(f"{base} {{\n    {declaration}\n}}")
+        state_selectors = [
+            f"{selector}:{pseudo}"
+            for pseudo in ("hover", "focus", "focus-visible", "active")
+            for selector in selectors
+        ]
+        chunks.append(f"{',\n'.join(state_selectors)} {{\n    {declaration}\n}}")
+        label_selectors = ",\n".join(f"{selector} p" for selector in selectors)
+        chunks.append(f"{label_selectors} {{\n    color: #ffffff !important;\n}}")
+    chunks.append("</style>")
+    return "\n".join(chunks)
+
+
+OPERATIONAL_CONTROL_DECK_STYLES = _build_operational_control_deck_styles()
 
 
 def _sku_widget_slug(sku: str) -> str:
@@ -223,6 +242,10 @@ def render_operational_control_deck(container_data, sku_data) -> None:
     if not st.session_state.get("_operational_control_deck_styles_loaded"):
         st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
         st.session_state["_operational_control_deck_styles_loaded"] = True
+    st.markdown(
+        f'<div class="{_CONTROL_DECK_ANCHOR_CLASS}" aria-hidden="true"></div>',
+        unsafe_allow_html=True,
+    )
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
