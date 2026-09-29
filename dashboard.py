@@ -158,52 +158,32 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-CONTROL_DECK_STYLES = """
+_CONTROL_DECK_ROW = (
+    'div[data-testid="stMarkdownContainer"]:has(.my-control-deck)'
+    ' + div[data-testid="stHorizontalBlock"]'
+)
+
+
+CONTROL_DECK_STYLES = f"""
 <style>
-.col-all-found button,
-div[data-testid="column"]:has(.col-all-found) button {
+.my-control-deck div[data-testid="column"]:nth-child(1) button,
+{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(1) button {{
     background-color: #198754 !important;
     border-color: #198754 !important;
     color: #ffffff !important;
-}
-.col-all-found button:hover,
-.col-all-found button:focus,
-div[data-testid="column"]:has(.col-all-found) button:hover,
-div[data-testid="column"]:has(.col-all-found) button:focus {
-    background-color: #157347 !important;
-    border-color: #146c43 !important;
-    color: #ffffff !important;
-}
-
-.col-not-present button,
-div[data-testid="column"]:has(.col-not-present) button {
+}}
+.my-control-deck div[data-testid="column"]:nth-child(2) button,
+{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(2) button {{
     background-color: #dc3545 !important;
     border-color: #dc3545 !important;
     color: #ffffff !important;
-}
-.col-not-present button:hover,
-.col-not-present button:focus,
-div[data-testid="column"]:has(.col-not-present) button:hover,
-div[data-testid="column"]:has(.col-not-present) button:focus {
-    background-color: #bb2d3b !important;
-    border-color: #b02a37 !important;
-    color: #ffffff !important;
-}
-
-.col-partial button,
-div[data-testid="column"]:has(.col-partial) button {
+}}
+.my-control-deck div[data-testid="column"]:nth-child(3) button,
+{_CONTROL_DECK_ROW} > div[data-testid="column"]:nth-child(3) button {{
     background-color: #0d6efd !important;
     border-color: #0d6efd !important;
     color: #ffffff !important;
-}
-.col-partial button:hover,
-.col-partial button:focus,
-div[data-testid="column"]:has(.col-partial) button:hover,
-div[data-testid="column"]:has(.col-partial) button:focus {
-    background-color: #0b5ed7 !important;
-    border-color: #0a58ca !important;
-    color: #ffffff !important;
-}
+}}
 </style>
 """
 
@@ -249,35 +229,30 @@ def render_control_deck(container_data, sku_data) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     _ensure_control_deck_styles_loaded()
 
-    col_1, col_2, col_3 = st.columns(3)
-    with col_1:
-        st.markdown('<div class="col-all-found">', unsafe_allow_html=True)
-        if st.button(
-            f"All Found ({units})",
-            key=_operational_widget_key("all_found", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "all", units)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_2:
-        st.markdown('<div class="col-not-present">', unsafe_allow_html=True)
-        if st.button(
-            "Not Present (0)",
-            key=_operational_widget_key("not_present", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "none", 0)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_3:
-        st.markdown('<div class="col-partial">', unsafe_allow_html=True)
-        if st.button(
-            f"Partial ({units})",
-            key=_operational_widget_key("partial", container_id, sku),
-            use_container_width=True,
-        ):
-            st.session_state[partial_flag] = not st.session_state[partial_flag]
+    with st.container():
+        st.markdown('<div class="my-control-deck">', unsafe_allow_html=True)
+        cols = st.columns(3)
+        with cols[0]:
+            if st.button(
+                f"All Found ({units})",
+                key=_operational_widget_key("all_found", container_id, sku),
+                use_container_width=True,
+            ):
+                submit_resolution(container_id, sku, "all", units)
+        with cols[1]:
+            if st.button(
+                "Not Present (0)",
+                key=_operational_widget_key("not_present", container_id, sku),
+                use_container_width=True,
+            ):
+                submit_resolution(container_id, sku, "none", 0)
+        with cols[2]:
+            if st.button(
+                f"Partial ({units})",
+                key=_operational_widget_key("partial", container_id, sku),
+                use_container_width=True,
+            ):
+                st.session_state[partial_flag] = not st.session_state[partial_flag]
         st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.get(partial_flag, False):
