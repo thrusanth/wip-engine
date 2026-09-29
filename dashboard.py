@@ -158,6 +158,35 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
+OPERATIONAL_CONTROL_DECK_STYLES = """
+<style>
+/* Column 1: All Found (Green) */
+div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(1) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+
+/* Column 2: Not Present (Red) */
+div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(2) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+
+/* Column 3: Partial (Blue) */
+div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(3) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+</style>
+"""
+
+
 def _sku_widget_slug(sku: str) -> str:
     return sku.replace("-", "_").lower()
 
@@ -177,69 +206,8 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
-def _control_deck_container_key(container_id: str, sku: str) -> str:
-    return _operational_widget_key("control_deck", container_id, sku)
-
-
-_CONTROL_DECK_IN_CARD = (
-    'div[class*="st-key-control_deck"] div[data-testid="stHorizontalBlock"]'
-    " > div[data-testid=\"column\"]"
-)
-
-
-CARD_TYPE_CONTROL_DECK_STYLES = f"""
-<style>
-/* Telemetry Card Control Deck */
-.telemetry-card div[data-testid="column"]:nth-of-type(1) button,
-div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(1) button {{
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}}
-.telemetry-card div[data-testid="column"]:nth-of-type(2) button,
-div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(2) button {{
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}}
-.telemetry-card div[data-testid="column"]:nth-of-type(3) button,
-div:has(.telemetry-card) {_CONTROL_DECK_IN_CARD}:nth-child(3) button {{
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}}
-
-/* Vision Task Card Control Deck */
-.vision-card div[data-testid="column"]:nth-of-type(1) button,
-div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(1) button {{
-    background-color: #198754 !important;
-    border-color: #198754 !important;
-    color: #ffffff !important;
-}}
-.vision-card div[data-testid="column"]:nth-of-type(2) button,
-div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(2) button {{
-    background-color: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: #ffffff !important;
-}}
-.vision-card div[data-testid="column"]:nth-of-type(3) button,
-div:has(.vision-card) {_CONTROL_DECK_IN_CARD}:nth-child(3) button {{
-    background-color: #0d6efd !important;
-    border-color: #0d6efd !important;
-    color: #ffffff !important;
-}}
-</style>
-"""
-
-
-def _ensure_card_type_control_deck_styles() -> None:
-    if not st.session_state.get("_card_type_control_deck_styles_loaded"):
-        st.markdown(CARD_TYPE_CONTROL_DECK_STYLES, unsafe_allow_html=True)
-        st.session_state["_card_type_control_deck_styles_loaded"] = True
-
-
-def render_control_deck(container_data, sku_data) -> None:
-    """Self-contained 3-button deck (Telemetry + Vision). Independent of card metric columns."""
+def render_operational_control_deck(container_data, sku_data) -> None:
+    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
     if not _requires_operational_control_deck(sku_data):
         return
 
@@ -251,34 +219,34 @@ def render_control_deck(container_data, sku_data) -> None:
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    deck_key = _control_deck_container_key(container_id, sku)
-
     st.markdown("<br>", unsafe_allow_html=True)
-    _ensure_card_type_control_deck_styles()
+    if not st.session_state.get("_operational_control_deck_styles_loaded"):
+        st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
+        st.session_state["_operational_control_deck_styles_loaded"] = True
+    col_1, col_2, col_3 = st.columns(3)
+    with col_1:
+        if st.button(
+            f"All Found ({units})",
+            key=_operational_widget_key("all_found", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "all", units)
 
-    with st.container(key=deck_key):
-        cols = st.columns(3)
-        with cols[0]:
-            if st.button(
-                f"All Found ({units})",
-                key=_operational_widget_key("all_found", container_id, sku),
-                use_container_width=True,
-            ):
-                submit_resolution(container_id, sku, "all", units)
-        with cols[1]:
-            if st.button(
-                "Not Present (0)",
-                key=_operational_widget_key("not_present", container_id, sku),
-                use_container_width=True,
-            ):
-                submit_resolution(container_id, sku, "none", 0)
-        with cols[2]:
-            if st.button(
-                f"Partial ({units})",
-                key=_operational_widget_key("partial", container_id, sku),
-                use_container_width=True,
-            ):
-                st.session_state[partial_flag] = not st.session_state[partial_flag]
+    with col_2:
+        if st.button(
+            "Not Present (0)",
+            key=_operational_widget_key("not_present", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "none", 0)
+
+    with col_3:
+        if st.button(
+            f"Partial ({units})",
+            key=_operational_widget_key("partial", container_id, sku),
+            use_container_width=True,
+        ):
+            st.session_state[partial_flag] = not st.session_state[partial_flag]
 
     if st.session_state.get(partial_flag, False):
         st.warning("Partial recovery in progress — enter quantity recovered below.")
@@ -351,7 +319,8 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
                 "✅ **Fully accounted:** Case split matches telemetry "
                 f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
             )
-        render_control_deck(container_data, sku_data)
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft01_card(container_data, sku_data):
@@ -386,7 +355,8 @@ def render_vision_task_ft01_card(container_data, sku_data):
             )
         else:
             st.success("✅ **Task Complete / Fully Reconciled:** All units successfully tracked.")
-        render_control_deck(container_data, sku_data)
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(container_data, sku_data)
 
 
 def render_vision_task_ft03_card(container_data, sku_data):
@@ -412,7 +382,8 @@ def render_vision_task_ft03_card(container_data, sku_data):
         st.success("✅ **Variance Cleared:** Un-shelved stock presence confirmed in backroom.")
     else:
         st.warning("⚠️ **ACTION REQUIRED:** Discrepancy detected.")
-    render_control_deck(container_data, sku_data)
+    if _requires_operational_control_deck(sku_data):
+        render_operational_control_deck(container_data, sku_data)
 
 
 def build_flattop_card_grid(containers_dict):
@@ -445,16 +416,13 @@ FLATTOP_CARDS_PER_ROW = 3
 
 
 def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
-    card_class = "telemetry-card" if card_kind == "execution" else "vision-card"
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
         if card_kind == "execution":
             render_execution_telemetry_card(container_data, sku_data, key_prefix)
         elif card_kind == "vision_ft01":
             render_vision_task_ft01_card(container_data, sku_data)
         elif card_kind == "vision_ft03":
             render_vision_task_ft03_card(container_data, sku_data)
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 flattop_cards = build_flattop_card_grid(containers)
