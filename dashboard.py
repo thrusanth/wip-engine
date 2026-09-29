@@ -17,34 +17,27 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Destroy the vertical spacing of the invisible marker containers */
-div[data-testid="element-container"]:has(.btn-marker-green),
-div[data-testid="element-container"]:has(.btn-marker-red),
-div[data-testid="element-container"]:has(.btn-marker-blue) {
-    display: none !important;
-}
-
-/* Color the button inside any column containing the green marker */
-div[data-testid="column"]:has(.btn-marker-green) button {
+/* Target the 1st button column (Green) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button {
     background-color: #198754 !important; border-color: #198754 !important; color: #ffffff !important;
 }
-div[data-testid="column"]:has(.btn-marker-green) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(1) button:hover {
     background-color: #157347 !important; border-color: #146c43 !important;
 }
 
-/* Color the button inside any column containing the red marker */
-div[data-testid="column"]:has(.btn-marker-red) button {
+/* Target the 2nd button column (Red) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button {
     background-color: #dc3545 !important; border-color: #dc3545 !important; color: #ffffff !important;
 }
-div[data-testid="column"]:has(.btn-marker-red) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(2) button:hover {
     background-color: #bb2d3b !important; border-color: #b02a37 !important;
 }
 
-/* Color the button inside any column containing the blue marker */
-div[data-testid="column"]:has(.btn-marker-blue) button {
+/* Target the 3rd button column (Blue) */
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button {
     background-color: #0d6efd !important; border-color: #0d6efd !important; color: #ffffff !important;
 }
-div[data-testid="column"]:has(.btn-marker-blue) button:hover {
+div[data-testid="stHorizontalBlock"]:has(button) > div[data-testid="column"]:nth-child(3) button:hover {
     background-color: #0b5ed7 !important; border-color: #0a58ca !important;
 }
 </style>
@@ -231,10 +224,6 @@ def render_operational_control_deck(container_data, sku_data) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     ctrl_cols = st.columns(3)
     with ctrl_cols[0]:
-        st.markdown(
-            '<span class="btn-marker-green" style="display:none;"></span>',
-            unsafe_allow_html=True,
-        )
         if st.button(
             f"All Found ({units})",
             key=_operational_widget_key("all_found", container_id, sku),
@@ -243,10 +232,6 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             submit_resolution(container_id, sku, "all", units)
 
     with ctrl_cols[1]:
-        st.markdown(
-            '<span class="btn-marker-red" style="display:none;"></span>',
-            unsafe_allow_html=True,
-        )
         if st.button(
             "Not Present (0)",
             key=_operational_widget_key("not_present", container_id, sku),
@@ -255,10 +240,6 @@ def render_operational_control_deck(container_data, sku_data) -> None:
             submit_resolution(container_id, sku, "none", 0)
 
     with ctrl_cols[2]:
-        st.markdown(
-            '<span class="btn-marker-blue" style="display:none;"></span>',
-            unsafe_allow_html=True,
-        )
         if st.button(
             f"Partial ({units})",
             key=_operational_widget_key("partial", container_id, sku),
