@@ -142,7 +142,11 @@ with tab1:
 
 with tab2:
     st.subheader("Live Execution Telemetry")
-    st.dataframe(telemetry_rows, use_container_width=True, hide_index=True)
+    telemetry_df = pd.DataFrame(telemetry_rows)
+    telemetry_df = telemetry_df[telemetry_df["Drift"] != 0].sort_values(
+        "Drift", ascending=False
+    )
+    st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
     if exception_rows:
         st.subheader("Active Telemetry Exceptions")
