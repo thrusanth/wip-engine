@@ -158,6 +158,46 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
+def inject_phantom_resolution_button_styles() -> None:
+    st.markdown(
+        """
+<style>
+div[class*="st-key-"][class$="_all"] button {
+  background-color: #16a34a !important;
+  color: #ffffff !important;
+  border: 1px solid #15803d !important;
+}
+div[class*="st-key-"][class$="_all"] button:hover {
+  background-color: #15803d !important;
+  border-color: #166534 !important;
+  color: #ffffff !important;
+}
+div[class*="st-key-"][class$="_none"] button {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
+  border: 1px solid #b91c1c !important;
+}
+div[class*="st-key-"][class$="_none"] button:hover {
+  background-color: #b91c1c !important;
+  border-color: #991b1b !important;
+  color: #ffffff !important;
+}
+div[class*="st-key-"][class$="_partial"] button {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+  border: 1px solid #1d4ed8 !important;
+}
+div[class*="st-key-"][class$="_partial"] button:hover {
+  background-color: #1d4ed8 !important;
+  border-color: #1e40af !important;
+  color: #ffffff !important;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
     """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
     prefix = card_key_prefix
@@ -200,16 +240,28 @@ def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
         st.markdown("<br>", unsafe_allow_html=True)
         col_1, col_2, col_3 = st.columns(3)
         with col_1:
-            if st.button(f"All Found ({sku_data['drift']})", key=f"{prefix}_all"):
+            if st.button(
+                f"All Found ({sku_data['drift']})",
+                key=f"{prefix}_all",
+                use_container_width=True,
+            ):
                 submit_resolution(container_data["id"], sku_data["sku"], "all", sku_data["drift"])
         with col_2:
-            if st.button("Not Present (0)", key=f"{prefix}_none"):
+            if st.button(
+                "Not Present (0)",
+                key=f"{prefix}_none",
+                use_container_width=True,
+            ):
                 submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
         with col_3:
             partial_flag = f"{prefix}_show_partial"
             if partial_flag not in st.session_state:
                 st.session_state[partial_flag] = False
-            if st.button("Partial Found...", key=f"{prefix}_partial"):
+            if st.button(
+                f"Partial ({sku_data['drift']})",
+                key=f"{prefix}_partial",
+                use_container_width=True,
+            ):
                 st.session_state[partial_flag] = not st.session_state[partial_flag]
 
         if st.session_state.get(partial_flag, False):
@@ -338,18 +390,26 @@ def build_flattop_card_grid(containers_dict):
 
 
 FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
+FLATTOP_CARDS_PER_ROW = 3
+
+
+def render_flattop_card(card_kind, container_data, sku_data, key_prefix):
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        if card_kind == "execution":
+            render_execution_telemetry_card(container_data, sku_data, key_prefix)
+        elif card_kind == "vision_ft01":
+            render_vision_task_ft01_card(container_data, sku_data)
+        elif card_kind == "vision_ft03":
+            render_vision_task_ft03_card(container_data, sku_data)
+
+
+inject_phantom_resolution_button_styles()
 
 flattop_cards = build_flattop_card_grid(containers)
-if flattop_cards:
-    flattop_columns = st.columns([1] * len(flattop_cards))
-    for column, (card_kind, container_data, sku_data, key_prefix) in zip(
-        flattop_columns, flattop_cards
-    ):
+for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
+    row_cards = flattop_cards[row_start : row_start + FLATTOP_CARDS_PER_ROW]
+    row_columns = st.columns(3)
+    for column_index, column in enumerate(row_columns):
         with column:
-            with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-                if card_kind == "execution":
-                    render_execution_telemetry_card(container_data, sku_data, key_prefix)
-                elif card_kind == "vision_ft01":
-                    render_vision_task_ft01_card(container_data, sku_data)
-                elif card_kind == "vision_ft03":
-                    render_vision_task_ft03_card(container_data, sku_data)
+            if column_index < len(row_cards):
+                render_flattop_card(*row_cards[column_index])
