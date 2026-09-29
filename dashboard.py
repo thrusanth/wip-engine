@@ -217,6 +217,19 @@ def _requires_operational_control_deck(sku_data: dict) -> bool:
     return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
 
 
+def _container_view_from_task(task: dict) -> dict:
+    return {
+        "id": task["container_id"],
+        "status": task["status"],
+        "zone": task["zone"],
+    }
+
+
+def _sku_view_from_task(task: dict) -> dict:
+    container_fields = {"container_id", "status", "zone"}
+    return {key: value for key, value in task.items() if key not in container_fields}
+
+
 def render_operational_control_deck(container_data, sku_data) -> None:
     """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
     if not _requires_operational_control_deck(sku_data):
@@ -278,90 +291,81 @@ def render_operational_control_deck(container_data, sku_data) -> None:
                 submit_resolution(container_id, sku, "partial", partial_qty)
 
 
-def render_execution_telemetry_card(container_data, sku_data, card_key_prefix):
-    """Execution Telemetry card body (FT-02 / FT-04 inventory lines)."""
-    product_name = sku_data.get("name", sku_data["sku"])
-
-    st.subheader(f"Execution Telemetry: {container_data['id']}")
-    st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
-    st.markdown(
-        f"**SKU Profile:** {product_name}  \n"
-        f"`{sku_data['sku']}`  \n"
-        f"**EAN:** `{sku_data.get('ean', '')}`"
-    )
-
-    metrics_left, metrics_right = st.columns(2)
-    with metrics_left:
-        st.metric("Expected Quantity", sku_data["expected"])
-        st.metric("Sent to Backstock", sku_data.get("backstock", 0))
-    with metrics_right:
-        st.metric("Worked to Shelf", sku_data["worked"])
-        st.metric("Phantom Drift", sku_data["drift"])
-
-    st.markdown("---")
-    render_unaccounted_variance_metric(sku_data)
-
-    if sku_data["is_resolved"]:
-        if sku_data["resolution_type"] == "all":
-            st.success("✅ **Resolved:** All units recovered and accounted for.")
-        elif sku_data["resolution_type"] == "none":
-            st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
-        elif sku_data["resolution_type"] == "partial":
-            st.warning(
-                f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
-                f"{sku_data['shrink_confirmed']} confirmed as shrink."
+def build_tasks(containers_dict: dict) -> list[dict]:
+    """One task dict per container SKU line for the strict execution telemetry template."""
+    tasks: list[dict] = []
+    for container_id, container in containers_dict.items():
+        for sku_data in container.get("skus", []):
+            tasks.append(
+                {
+                    "container_id": container.get("id", container_id),
+                    "status": container.get("status", ""),
+                    "zone": container.get("zone", ""),
+                    **sku_data,
+                }
             )
-    else:
-        if sku_data["drift"] > 0:
-            st.warning(
-                f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-                f"'{product_name}' are missing and completely unaccounted for in system telemetry."
-            )
-        elif sku_data.get("variance", 0) > 0:
-            st.warning(
-                f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
-                "System suspects untracked backstock routing."
-            )
-        else:
-            st.success(
-                "✅ **Fully accounted:** Case split matches telemetry "
-                f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
-            )
-        if _requires_operational_control_deck(sku_data):
-            render_operational_control_deck(container_data, sku_data)
-
-
-def build_flattop_card_grid(containers_dict):
-    """Ordered Execution Telemetry flattop cards for grid rendering."""
-    cards = []
-
-    ft02 = containers_dict.get("FT-02")
-    if ft02 and ft02.get("skus"):
-        cards.append((ft02, ft02["skus"][0], "ft2"))
-
-    ft04 = containers_dict.get("FT-04")
-    if ft04:
-        for sku_data in ft04.get("skus", []):
-            line_key = sku_data["sku"].replace("-", "_").lower()
-            cards.append((ft04, sku_data, f"ft4_{line_key}"))
-
-    return cards
+    return tasks
 
 
 FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
-FLATTOP_CARDS_PER_ROW = 3
 
 
-def render_flattop_card(container_data, sku_data, key_prefix):
+def render_execution_telemetry_card(task: dict) -> None:
+    """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
+    container_data = _container_view_from_task(task)
+    sku_data = _sku_view_from_task(task)
+    product_name = sku_data.get("name", sku_data["sku"])
+
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        render_execution_telemetry_card(container_data, sku_data, key_prefix)
+        st.subheader(f"Execution Telemetry: {container_data['id']}")
+        st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
+        st.markdown(
+            f"**SKU Profile:** {product_name}  \n"
+            f"`{sku_data['sku']}`  \n"
+            f"**EAN:** `{sku_data.get('ean', '')}`"
+        )
+
+        metrics_left, metrics_right = st.columns(2)
+        with metrics_left:
+            st.metric("Expected Quantity", sku_data["expected"])
+            st.metric("Sent to Backstock", sku_data.get("backstock", 0))
+        with metrics_right:
+            st.metric("Worked to Shelf", sku_data["worked"])
+            st.metric("Phantom Drift", sku_data["drift"])
+
+        st.markdown("---")
+        render_unaccounted_variance_metric(sku_data)
+
+        if sku_data["is_resolved"]:
+            if sku_data["resolution_type"] == "all":
+                st.success("✅ **Resolved:** All units recovered and accounted for.")
+            elif sku_data["resolution_type"] == "none":
+                st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
+            elif sku_data["resolution_type"] == "partial":
+                st.warning(
+                    f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
+                    f"{sku_data['shrink_confirmed']} confirmed as shrink."
+                )
+        else:
+            if sku_data["drift"] > 0:
+                st.warning(
+                    f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
+                    f"'{product_name}' are missing and completely unaccounted for in system telemetry."
+                )
+            elif sku_data.get("variance", 0) > 0:
+                st.warning(
+                    f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
+                    "System suspects untracked backstock routing."
+                )
+            else:
+                st.success(
+                    "✅ **Fully accounted:** Case split matches telemetry "
+                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+                )
+            if _requires_operational_control_deck(sku_data):
+                render_operational_control_deck(container_data, sku_data)
 
 
-flattop_cards = build_flattop_card_grid(containers)
-for row_start in range(0, len(flattop_cards), FLATTOP_CARDS_PER_ROW):
-    row_cards = flattop_cards[row_start : row_start + FLATTOP_CARDS_PER_ROW]
-    row_columns = st.columns(3)
-    for column_index, column in enumerate(row_columns):
-        with column:
-            if column_index < len(row_cards):
-                render_flattop_card(*row_cards[column_index])
+tasks = build_tasks(containers)
+for task in tasks:
+    render_execution_telemetry_card(task)
