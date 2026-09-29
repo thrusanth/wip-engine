@@ -160,31 +160,34 @@ def render_unaccounted_variance_metric(
 
 PHANTOM_RESOLUTION_BUTTON_STYLES = """
 <style>
-div[class*="st-key-"][class$="_all"] [data-baseweb="button"] {
+/* Scoped to the 3-button resolution row immediately after the marker */
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(1) [data-baseweb="button"] {
     background-color: #198754 !important;
     background: #198754 !important;
     color: #ffffff !important;
     border-color: #198754 !important;
 }
-div[class*="st-key-"][class$="_all"] [data-baseweb="button"] p {
-    color: #ffffff !important;
-}
-div[class*="st-key-"][class$="_none"] [data-baseweb="button"] {
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(2) [data-baseweb="button"] {
     background-color: #dc3545 !important;
     background: #dc3545 !important;
     color: #ffffff !important;
     border-color: #dc3545 !important;
 }
-div[class*="st-key-"][class$="_none"] [data-baseweb="button"] p {
-    color: #ffffff !important;
-}
-div[class*="st-key-"][class$="_partial"] [data-baseweb="button"] {
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
+  + div[data-testid="stHorizontalBlock"]
+  > div[data-testid="column"]:nth-of-type(3) [data-baseweb="button"] {
     background-color: #0d6efd !important;
     background: #0d6efd !important;
     color: #ffffff !important;
     border-color: #0d6efd !important;
 }
-div[class*="st-key-"][class$="_partial"] [data-baseweb="button"] p {
+div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
+  + div[data-testid="stHorizontalBlock"]
+  [data-baseweb="button"] p {
     color: #ffffff !important;
 }
 </style>
