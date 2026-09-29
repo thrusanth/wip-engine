@@ -5,29 +5,9 @@
       "name": "Heinz Baked Beans 6pk",
       "price": 1.1
     },
-    "CHOCO-BISCUITS-6PK": {
-      "ean": "5012345678918",
-      "name": "McVitie's Chocolate Biscuits 6pk",
-      "price": 1.5
-    },
-    "PERONI-12PK": {
-      "ean": "5012345678925",
-      "name": "Peroni Nastro Azzurro 12pk",
-      "price": 15.0
-    },
     "MIXED-MANIFEST": {
       "ean": "5012345000012",
       "name": "Mixed Delivery Cage Manifest"
-    },
-    "ORANGE-SODA-8PK": {
-      "ean": "5012345678948",
-      "name": "Orange Soda 8pk",
-      "price": 2.25
-    },
-    "TWIRL-8PK": {
-      "ean": "5012345678955",
-      "name": "Cadbury Twirl Multipack 8pk",
-      "price": 2.0
     }
   }
 }

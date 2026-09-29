@@ -58,10 +58,6 @@ class WipEngine:
             ],
         )
 
-        from services.simulator import seed_ft_04_fixture
-
-        seed_ft_04_fixture(self)
-
         with self._lock:
             self._recalculate_all()
             self._sync_active_exceptions()
@@ -220,8 +216,7 @@ class WipEngine:
             )
 
             if scenario == "phantom_drift":
-                drift_container_id = self._rng.choice(["FT-02", "FT-04"])
-                container = self.containers.get(drift_container_id)
+                container = self.containers.get("FT-02")
                 if container and container.skus:
                     drift_skus = [
                         s
@@ -253,7 +248,7 @@ class WipEngine:
             elif scenario == "sku_variance":
                 pool_sku = self._rng.choice(list(get_simulation_sku_pool().keys()))
                 if pool_sku == "MIXED-MANIFEST":
-                    pool_sku = "CHOCO-BISCUITS-6PK"
+                    pool_sku = "BAKED-BEANS-6PK"
                 profile = get_sku_profile(pool_sku)
                 self.active_exceptions.append(
                     ActiveException(
