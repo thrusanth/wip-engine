@@ -101,8 +101,6 @@ with col5:
     else:
         st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
-active_exceptions = telemetry_data.get("active_exceptions", []) if telemetry_data else []
-
 telemetry_rows = []
 for container_id, container in containers.items():
     zone = container.get("zone", "")
