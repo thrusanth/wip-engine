@@ -367,5 +367,11 @@ def render_execution_telemetry_card(task: dict) -> None:
 
 
 tasks = build_tasks(containers)
-for task in tasks:
-    render_execution_telemetry_card(task)
+
+# Create a 2-column grid for the dashboard
+grid_cols = st.columns(2)
+
+for index, task in enumerate(tasks):
+    # Alternate between the left and right columns
+    with grid_cols[index % 2]:
+        render_execution_telemetry_card(task)
