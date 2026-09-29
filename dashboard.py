@@ -158,52 +158,60 @@ def render_unaccounted_variance_metric(
     st.metric(**metric_kwargs)
 
 
-_CONTROL_DECK_ANCHOR_CLASS = "operational-control-deck-anchor"
-_CONTROL_DECK_COLUMN_COLORS = (
-    "#198754",  # 1 — All Found (green)
-    "#dc3545",  # 2 — Not Present (red)
-    "#0d6efd",  # 3 — Partial (blue)
-)
+OPERATIONAL_CONTROL_DECK_STYLES = """
+<style>
+.btn-green-col button,
+div[data-testid="column"]:has(.btn-green-col) button {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    color: #ffffff !important;
+}
+.btn-green-col button:hover,
+.btn-green-col button:focus,
+.btn-green-col button:active,
+div[data-testid="column"]:has(.btn-green-col) button:hover,
+div[data-testid="column"]:has(.btn-green-col) button:focus,
+div[data-testid="column"]:has(.btn-green-col) button:active {
+    background-color: #157347 !important;
+    border-color: #146c43 !important;
+    color: #ffffff !important;
+}
 
+.btn-red-col button,
+div[data-testid="column"]:has(.btn-red-col) button {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #ffffff !important;
+}
+.btn-red-col button:hover,
+.btn-red-col button:focus,
+.btn-red-col button:active,
+div[data-testid="column"]:has(.btn-red-col) button:hover,
+div[data-testid="column"]:has(.btn-red-col) button:focus,
+div[data-testid="column"]:has(.btn-red-col) button:active {
+    background-color: #bb2d3b !important;
+    border-color: #b02a37 !important;
+    color: #ffffff !important;
+}
 
-def _control_deck_row_button_selectors(column_index: int) -> list[str]:
-    """Only the 3-button row immediately after each control-deck anchor (Telemetry + Vision)."""
-    anchor_row = (
-        f'div[data-testid="stMarkdownContainer"]:has(.{_CONTROL_DECK_ANCHOR_CLASS})'
-        f' + div[data-testid="stHorizontalBlock"]'
-    )
-    return [
-        f'{anchor_row} > div[data-testid="column"]:nth-child({column_index}) button',
-        f'{anchor_row} > div:nth-child({column_index}) button[kind="secondary"]',
-        f'{anchor_row} > div:nth-child({column_index}) button[data-testid="stBaseButton-secondary"]',
-    ]
-
-
-def _build_operational_control_deck_styles() -> str:
-    chunks: list[str] = ["<style>"]
-    for column_index, color in enumerate(_CONTROL_DECK_COLUMN_COLORS, start=1):
-        selectors = _control_deck_row_button_selectors(column_index)
-        declaration = (
-            f"background-color: {color} !important; "
-            f"border-color: {color} !important; "
-            f"color: #ffffff !important;"
-        )
-        base = ",\n".join(selectors)
-        chunks.append(f"/* Control deck column {column_index} */")
-        chunks.append(f"{base} {{\n    {declaration}\n}}")
-        state_selectors = [
-            f"{selector}:{pseudo}"
-            for pseudo in ("hover", "focus", "focus-visible", "active")
-            for selector in selectors
-        ]
-        chunks.append(f"{',\n'.join(state_selectors)} {{\n    {declaration}\n}}")
-        label_selectors = ",\n".join(f"{selector} p" for selector in selectors)
-        chunks.append(f"{label_selectors} {{\n    color: #ffffff !important;\n}}")
-    chunks.append("</style>")
-    return "\n".join(chunks)
-
-
-OPERATIONAL_CONTROL_DECK_STYLES = _build_operational_control_deck_styles()
+.btn-blue-col button,
+div[data-testid="column"]:has(.btn-blue-col) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+.btn-blue-col button:hover,
+.btn-blue-col button:focus,
+.btn-blue-col button:active,
+div[data-testid="column"]:has(.btn-blue-col) button:hover,
+div[data-testid="column"]:has(.btn-blue-col) button:focus,
+div[data-testid="column"]:has(.btn-blue-col) button:active {
+    background-color: #0b5ed7 !important;
+    border-color: #0a58ca !important;
+    color: #ffffff !important;
+}
+</style>
+"""
 
 
 def _sku_widget_slug(sku: str) -> str:
@@ -242,34 +250,36 @@ def render_operational_control_deck(container_data, sku_data) -> None:
     if not st.session_state.get("_operational_control_deck_styles_loaded"):
         st.markdown(OPERATIONAL_CONTROL_DECK_STYLES, unsafe_allow_html=True)
         st.session_state["_operational_control_deck_styles_loaded"] = True
-    st.markdown(
-        f'<div class="{_CONTROL_DECK_ANCHOR_CLASS}" aria-hidden="true"></div>',
-        unsafe_allow_html=True,
-    )
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
+        st.markdown('<div class="btn-green-col">', unsafe_allow_html=True)
         if st.button(
             f"All Found ({units})",
             key=_operational_widget_key("all_found", container_id, sku),
             use_container_width=True,
         ):
             submit_resolution(container_id, sku, "all", units)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_2:
+        st.markdown('<div class="btn-red-col">', unsafe_allow_html=True)
         if st.button(
             "Not Present (0)",
             key=_operational_widget_key("not_present", container_id, sku),
             use_container_width=True,
         ):
             submit_resolution(container_id, sku, "none", 0)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_3:
+        st.markdown('<div class="btn-blue-col">', unsafe_allow_html=True)
         if st.button(
             f"Partial ({units})",
             key=_operational_widget_key("partial", container_id, sku),
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.get(partial_flag, False):
         st.warning("Partial recovery in progress — enter quantity recovered below.")
