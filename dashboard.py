@@ -160,34 +160,27 @@ def render_unaccounted_variance_metric(
 
 PHANTOM_RESOLUTION_BUTTON_STYLES = """
 <style>
-/* Scoped to the 3-button resolution row immediately after the marker */
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(1) [data-baseweb="button"] {
+/* Column 1: All Found (Green) */
+div.stHorizontalBlock > div:nth-child(1) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(1) button {
     background-color: #198754 !important;
-    background: #198754 !important;
-    color: #ffffff !important;
     border-color: #198754 !important;
+    color: #ffffff !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(2) [data-baseweb="button"] {
+
+/* Column 2: Not Present (Red) */
+div.stHorizontalBlock > div:nth-child(2) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(2) button {
     background-color: #dc3545 !important;
-    background: #dc3545 !important;
-    color: #ffffff !important;
     border-color: #dc3545 !important;
-}
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
-  + div[data-testid="stHorizontalBlock"]
-  > div[data-testid="column"]:nth-of-type(3) [data-baseweb="button"] {
-    background-color: #0d6efd !important;
-    background: #0d6efd !important;
     color: #ffffff !important;
-    border-color: #0d6efd !important;
 }
-div[data-testid="stMarkdownContainer"]:has(.phantom-resolution-btn-row)
-  + div[data-testid="stHorizontalBlock"]
-  [data-baseweb="button"] p {
+
+/* Column 3: Partial (Blue) */
+div.stHorizontalBlock > div:nth-child(3) button[kind="secondary"],
+div[data-testid="column"]:nth-of-type(3) button {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
     color: #ffffff !important;
 }
 </style>
@@ -201,20 +194,12 @@ def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> 
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
-    if not st.session_state.get("_phantom_resolution_button_styles_v2_loaded"):
-        st.markdown(PHANTOM_RESOLUTION_BUTTON_STYLES, unsafe_allow_html=True)
-        st.session_state["_phantom_resolution_button_styles_v2_loaded"] = True
-
-    st.markdown(
-        '<span class="phantom-resolution-btn-row" aria-hidden="true"></span>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(PHANTOM_RESOLUTION_BUTTON_STYLES, unsafe_allow_html=True)
     col_1, col_2, col_3 = st.columns(3)
     with col_1:
         if st.button(
             f"All Found ({drift})",
             key=f"{prefix}_all",
-            type="primary",
             use_container_width=True,
         ):
             submit_resolution(container_data["id"], sku_data["sku"], "all", drift)
@@ -223,7 +208,6 @@ def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> 
         if st.button(
             "Not Present (0)",
             key=f"{prefix}_none",
-            type="primary",
             use_container_width=True,
         ):
             submit_resolution(container_data["id"], sku_data["sku"], "none", 0)
@@ -232,7 +216,6 @@ def render_phantom_resolution_actions(container_data, sku_data, prefix: str) -> 
         if st.button(
             f"Partial ({drift})",
             key=f"{prefix}_partial",
-            type="primary",
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
