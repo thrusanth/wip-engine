@@ -34,7 +34,7 @@ To run the full decoupled architecture locally using Docker Compose:
 Clone the repository and spin up the containers in detached mode:
 
 ```bash
-sudo docker-compose up --build -d
+docker compose up --build -d
 ```
 
 ### 2. Access the Application
