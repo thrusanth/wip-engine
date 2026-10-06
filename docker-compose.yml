@@ -5,13 +5,19 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - WIP_API_KEY=dev-wip-engine-key
+      - WIP_PRODUCTS_PATH=/app/data/products.json
+    volumes:
+      - ./data/products.json:/app/data/products.json:ro
     command: uvicorn main:app --host 0.0.0.0 --port 8000
   frontend:
     build: .
     ports:
       - "8501:8501"
     environment:
-      - API_BASE_URL=http://172.18.0.1:8000/api/v1
+      - API_BASE_URL=http://backend:8000/api/v1
+      - WIP_API_KEY=dev-wip-engine-key
     command: streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
       - backend
