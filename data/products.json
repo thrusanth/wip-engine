@@ -18,6 +18,31 @@
     "MIXED-MANIFEST": {
       "ean": "5012345000012",
       "name": "Mixed Delivery Cage Manifest"
+    },
+    "PASTA-CASE-12": {
+      "ean": "5012345678912",
+      "name": "Pasta Case",
+      "price": 2.4
+    },
+    "RICE-CASE-6": {
+      "ean": "5012345678982",
+      "name": "Microwave Rice",
+      "price": 1.8
+    },
+    "WATER-CASE-24": {
+      "ean": "5012345678975",
+      "name": "Spring Water Case",
+      "price": 3.2
+    },
+    "CEREAL-CASE-10": {
+      "ean": "5012345678965",
+      "name": "Family Cereal Case",
+      "price": 2.9
+    },
+    "ENERGY-DRINK-12PK": {
+      "ean": "5012345678908",
+      "name": "Energy Drink 12pk",
+      "price": 3.5
     }
   }
 }

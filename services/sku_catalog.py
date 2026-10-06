@@ -6,15 +6,20 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, NotRequired, Optional, TypedDict
+from typing import Dict, Optional, TypedDict
 
 logger = logging.getLogger(__name__)
 
 
-class SkuCatalogEntry(TypedDict):
+class _SkuCatalogEntryRequired(TypedDict):
     ean: str
     name: str
-    price: NotRequired[float]
+
+
+class SkuCatalogEntry(_SkuCatalogEntryRequired, total=False):
+    """Product row from products.json; ``price`` is optional for manifest-only SKUs."""
+
+    price: float
 
 
 _DEFAULT_PRODUCTS_PATH = Path(__file__).resolve().parent.parent / "data" / "products.json"

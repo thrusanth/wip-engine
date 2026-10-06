@@ -24,6 +24,7 @@ The two containers are orchestrated via `docker-compose.yml` on a custom bridge 
 - **Phantom Drift Detection:** Automatically flag when expected inventory quantities diverge from physical execution (e.g., Computer Vision fill events and recorded backstock), isolating potential shrinkage immediately.
 - **Financial Shrink Tracking:** Dynamically calculate the monetary impact of unresolved phantom drift in real-time based on specific SKU values.
 - **3-Way Interactive Resolution:** Shift leaders can address edge tasks directly from the dashboard by confirming stock as "All Found" (backstock), "Not Present" (confirming shrink), or "Partial Found" (split resolution).
+- **Edge Blackout Autonomy & Disaster Recovery (Part 5):** Offline SQLite WAL buffering for network-disconnected restock fills (`ft-03`), local hash-based edge computer vision fingerprinting (`ft-05`), and catastrophic power loss disaster recovery protocols enforcing mandatory post-blackout gap scans (`ft-04`).
 
 ## Getting Started
 
@@ -34,7 +35,7 @@ To run the full decoupled architecture locally using Docker Compose:
    git clone [https://github.com/thrusanth/wip_engine.git](https://github.com/thrusanth/wip_engine.git)
    cd wip_engine
    git checkout cursor/simplify-phantom-drift-logic-c4d8
-   
+
 ### 2. Start the Stack
 
 Clone the repository and spin up the containers in detached mode:
@@ -49,3 +50,17 @@ Once the containers are built and running, you can access the services in your b
 
 - **Streamlit Dashboard (Frontend):** [http://localhost:8501](http://localhost:8501)
 - **FastAPI Interactive Docs (Backend):** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Running Blackout & Edge Resilience Simulations
+
+To test the offline edge buffer, camera autonomy, and power cut disaster recovery scripts locally against the containerized backend:
+
+```bash
+# Ensure your Docker Compose stack is running
+docker compose up -d
+
+# Run the master functional test suite:
+python3 ft-03.py  # Network drop, offline fill telemetry, & asynchronous SQLite WAL recovery
+python3 ft-04.py  # Catastrophic total power cut disaster recovery & mandatory store gap scans
+python3 ft-05.py  # Localized edge AI computer vision autonomy & local hash fingerprinting
+```

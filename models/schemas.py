@@ -28,6 +28,10 @@ class ExceptionKind(str, Enum):
     CAGE_DISCREPANCY = "cage_discrepancy"
     SKU_VARIANCE = "sku_variance"
     UNTRACKED_BACKSTOCK = "untracked_backstock"
+    TOTAL_POWER_CUT = "total_power_cut"
+
+
+TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 
 # ---------------------------------------------------------
 # Core Domain Models
@@ -85,6 +89,7 @@ class ActiveException(BaseModel):
     zone: str
     units: int = Field(..., ge=0)
     message: str
+    status: str = ""
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("ean")
@@ -105,6 +110,95 @@ class ResolutionEvent(BaseModel):
     resolution_type: ResolutionType
     recovered_units: int = 0
 
+class FillTelemetryEvent(BaseModel):
+    """Payload from edge clients when a shelf fill / POS decrement is observed."""
+    event_id: str
+    sku: str
+    action: str = "decrement"
+    timestamp: str
+
+
+class OfflineFillAuditEntry(BaseModel):
+    """Central ledger record for edge-buffer fills replayed after connectivity returns."""
+    event_id: str
+    sku: str
+    name: str = ""
+    ean: str = ""
+    quantity: int = Field(default=1, ge=1)
+    action: str
+    timestamp: str
+    sync_status: str = "Synced / Offline Fill"
+
+
+class DeliveryManifestLine(BaseModel):
+    sku: str
+    expected_units: int = Field(..., ge=1)
+
+
+class IncomingDeliveryManifest(BaseModel):
+    manifest_id: str
+    zone: str = "Backroom Staging"
+    lines: List[DeliveryManifestLine]
+
+
+class TotalPowerCutEvent(BaseModel):
+    manifest_id: str
+    timestamp: str
+
+
+class ManifestAutoConfirmEntry(BaseModel):
+    """Central ledger row when a pending delivery manifest is auto-confirmed after power loss."""
+    manifest_id: str
+    sku: str
+    name: str = ""
+    expected_units: int
+    confirmed_units: int
+    timestamp: str
+    sync_status: str = "Auto-Confirmed / Total Power Cut"
+
+
+class OfflinePartialFillReport(BaseModel):
+    """Post-blackout reconciliation when shelf fills do not match case manifest."""
+    batch_id: str
+    sku: str
+    expected_units: int = Field(..., ge=1)
+    recorded_shelf_units: int = Field(..., ge=0)
+    action: str = "fill"
+    timestamp: str
+
+
+class InventoryGapAuditEntry(BaseModel):
+    """Ledger row for unlogged backstock / gap-scan exceptions after partial offline fills."""
+    batch_id: str
+    sku: str
+    name: str = ""
+    expected_units: int
+    recorded_units: int
+    variance_delta: int
+    unlogged_backstock_units: int
+    action: str
+    timestamp: str
+    status: str = "Gap Scan Recommended"
+
+
+class SKUVisualSignature(BaseModel):
+    """Localized visual feature row cached on the edge after a cloud teach pass."""
+
+    sku_id: str
+    ean: str = ""
+    feature_hash: str
+    confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+
+class OfflineDetectionEvent(BaseModel):
+    """Append-only edge detection emitted while the camera runs in disconnected autonomy."""
+
+    timestamp: str
+    sku_id: str
+    detected_quantity: int = Field(..., ge=0)
+    status: str = "[STATE: DISCONNECTED_AUTONOMY]"
+
+
 # ---------------------------------------------------------
 # Metrics Models (Output)
 # ---------------------------------------------------------
@@ -121,3 +215,6 @@ class TelemetryResponse(BaseModel):
     metrics: GlobalMetrics
     containers: Dict[str, ContainerState]
     active_exceptions: List[ActiveException] = Field(default_factory=list)
+    offline_fill_audit: List[OfflineFillAuditEntry] = Field(default_factory=list)
+    inventory_gap_audit: List[InventoryGapAuditEntry] = Field(default_factory=list)
+    manifest_auto_confirm_audit: List[ManifestAutoConfirmEntry] = Field(default_factory=list)

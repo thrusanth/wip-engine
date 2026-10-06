@@ -13,13 +13,20 @@ from models.schemas import (
     ContainerState,
     ContainerStatus,
     ExceptionKind,
+    FillTelemetryEvent,
     GlobalMetrics,
+    IncomingDeliveryManifest,
+    InventoryGapAuditEntry,
+    ManifestAutoConfirmEntry,
+    OfflineFillAuditEntry,
+    OfflinePartialFillReport,
     ResolutionEvent,
+    TOTAL_POWER_CUT_STATUS,
+    TotalPowerCutEvent,
     ResolutionType,
     SkuState,
     TelemetryResponse,
 )
-
 
 class WipEngine:
     def __init__(self):
@@ -27,6 +34,13 @@ class WipEngine:
         self._rng = random.Random(FIXED_SIMULATION_RANDOM_SEED)
         self._live_simulation_enabled = LIVE_SIMULATION_ENABLED
         self.containers: Dict[str, ContainerState] = {}
+        self.processed_fill_event_ids: set[str] = set()
+        self.offline_fill_ledger: List[OfflineFillAuditEntry] = []
+        self.inventory_gap_ledger: List[InventoryGapAuditEntry] = []
+        self.processed_gap_batch_ids: set[str] = set()
+        self.pending_delivery_manifests: Dict[str, ContainerState] = {}
+        self.processed_power_cut_manifest_ids: set[str] = set()
+        self.manifest_auto_confirm_ledger: List[ManifestAutoConfirmEntry] = []
         self.active_exceptions: List[ActiveException] = []
         self.metrics = GlobalMetrics()
         self._pending_delivery_cages = 4
@@ -237,6 +251,18 @@ class WipEngine:
                 if exc.kind in (ExceptionKind.CAGE_DISCREPANCY, ExceptionKind.SKU_VARIANCE):
                     exceptions.append(exc)
 
+        # Preserve offline partial-fill gap scans (not derived from container SKU state).
+        existing_ids = {exc.id for exc in exceptions}
+        for exc in self.active_exceptions:
+            if exc.status == "Gap Scan Recommended" and exc.id not in existing_ids:
+                exceptions.append(exc)
+                existing_ids.add(exc.id)
+
+        for exc in self.active_exceptions:
+            if exc.kind == ExceptionKind.TOTAL_POWER_CUT and exc.id not in existing_ids:
+                exceptions.append(exc)
+                existing_ids.add(exc.id)
+
         self.active_exceptions = exceptions
 
     def apply_simulated_tick(self) -> None:
@@ -318,7 +344,182 @@ class WipEngine:
                 metrics=self.metrics.model_copy(deep=True),
                 containers={cid: c.model_copy(deep=True) for cid, c in self.containers.items()},
                 active_exceptions=[exc.model_copy(deep=True) for exc in self.active_exceptions],
+                offline_fill_audit=[
+                    entry.model_copy(deep=True) for entry in self.offline_fill_ledger
+                ],
+                inventory_gap_audit=[
+                    entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
+                ],
+                manifest_auto_confirm_audit=[
+                    entry.model_copy(deep=True) for entry in self.manifest_auto_confirm_ledger
+                ],
             )
+
+    def stage_incoming_delivery_manifest(
+        self, manifest: IncomingDeliveryManifest
+    ) -> TelemetryResponse:
+        """Register a pending inbound delivery manifest awaiting breakdown."""
+        with self._lock:
+            if manifest.manifest_id in self.pending_delivery_manifests:
+                raise ValueError(f"Manifest {manifest.manifest_id} is already pending")
+            if manifest.manifest_id in self.containers:
+                raise ValueError(f"Manifest {manifest.manifest_id} already active in ledger")
+
+            skus = [
+                self._sku_state(line.sku, expected=line.expected_units)
+                for line in manifest.lines
+            ]
+            self.pending_delivery_manifests[manifest.manifest_id] = ContainerState(
+                id=manifest.manifest_id,
+                status=ContainerStatus.STAGED_IN_BACKROOM,
+                zone=manifest.zone,
+                skus=skus,
+            )
+            self._pending_delivery_cages += 1
+            self._recalculate_all()
+            return self.get_telemetry()
+
+    def apply_total_power_cut(self, event: TotalPowerCutEvent) -> TelemetryResponse:
+        """Disaster recovery: auto-confirm pending manifest and mandate full gap scan."""
+        with self._lock:
+            if event.manifest_id in self.processed_power_cut_manifest_ids:
+                return self.get_telemetry()
+
+            pending = self.pending_delivery_manifests.pop(event.manifest_id, None)
+            if pending is None:
+                raise ValueError(f"No pending manifest found for {event.manifest_id}")
+
+            pending.status = ContainerStatus.IN_PROGRESS_SHOPFLOOR
+            for sku_state in pending.skus:
+                profile = get_sku_profile(sku_state.sku)
+                confirmed_units = sku_state.expected
+                sku_state.backstock = confirmed_units
+                sku_state.confirmed_backstock = confirmed_units
+
+                self.manifest_auto_confirm_ledger.append(
+                    ManifestAutoConfirmEntry(
+                        manifest_id=event.manifest_id,
+                        sku=sku_state.sku,
+                        name=profile.get("name", sku_state.sku),
+                        expected_units=sku_state.expected,
+                        confirmed_units=confirmed_units,
+                        timestamp=event.timestamp,
+                    )
+                )
+                self.active_exceptions.append(
+                    ActiveException(
+                        id=f"wip-powercut-{event.manifest_id}-{sku_state.sku}",
+                        kind=ExceptionKind.TOTAL_POWER_CUT,
+                        container_id=event.manifest_id,
+                        sku=sku_state.sku,
+                        ean=profile.get("ean", ""),
+                        zone=pending.zone,
+                        units=confirmed_units,
+                        status=TOTAL_POWER_CUT_STATUS,
+                        message=(
+                            f"Catastrophic power loss during delivery breakdown for "
+                            f"{profile.get('name', sku_state.sku)}. Manifest auto-confirmed "
+                            f"at {confirmed_units} units without physical verification — "
+                            "mandatory full store true-up gap scan required."
+                        ),
+                    )
+                )
+
+            self.containers[event.manifest_id] = pending
+            self.processed_power_cut_manifest_ids.add(event.manifest_id)
+            self._pending_delivery_cages = max(0, self._pending_delivery_cages - 1)
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
+
+    def process_fill_event(self, event: FillTelemetryEvent) -> TelemetryResponse:
+        """Applies an idempotent CV fill / shelf decrement from an edge telemetry client."""
+        with self._lock:
+            if event.event_id in self.processed_fill_event_ids:
+                return self.get_telemetry()
+
+            self.processed_fill_event_ids.add(event.event_id)
+            profile = get_sku_profile(event.sku)
+            self.offline_fill_ledger.append(
+                OfflineFillAuditEntry(
+                    event_id=event.event_id,
+                    sku=event.sku,
+                    name=profile.get("name", event.sku),
+                    ean=profile.get("ean", ""),
+                    quantity=1,
+                    action=event.action,
+                    timestamp=event.timestamp,
+                    sync_status="Synced / Offline Fill",
+                )
+            )
+
+            for container in self.containers.values():
+                for sku_state in container.skus:
+                    if sku_state.sku != event.sku:
+                        continue
+                    if event.action == "decrement":
+                        sku_state.cv_filled += 1
+                    else:
+                        sku_state.worked += 1
+
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
+
+    def process_offline_partial_fill_gap(
+        self, report: OfflinePartialFillReport
+    ) -> TelemetryResponse:
+        """Flag unlogged backstock after a partial offline shelf fill (gap scan)."""
+        with self._lock:
+            if report.batch_id in self.processed_gap_batch_ids:
+                return self.get_telemetry()
+
+            unlogged = report.expected_units - report.recorded_shelf_units
+            if unlogged < 0:
+                raise ValueError(
+                    "recorded_shelf_units cannot exceed expected_units for gap reconciliation"
+                )
+
+            profile = get_sku_profile(report.sku)
+            variance_delta = report.recorded_shelf_units - report.expected_units
+            self.processed_gap_batch_ids.add(report.batch_id)
+
+            if unlogged > 0:
+                gap_entry = InventoryGapAuditEntry(
+                    batch_id=report.batch_id,
+                    sku=report.sku,
+                    name=profile.get("name", report.sku),
+                    expected_units=report.expected_units,
+                    recorded_units=report.recorded_shelf_units,
+                    variance_delta=variance_delta,
+                    unlogged_backstock_units=unlogged,
+                    action=report.action,
+                    timestamp=report.timestamp,
+                    status="Gap Scan Recommended",
+                )
+                self.inventory_gap_ledger.append(gap_entry)
+                self.active_exceptions.append(
+                    ActiveException(
+                        id=f"wip-gap-{report.batch_id}",
+                        kind=ExceptionKind.UNTRACKED_BACKSTOCK,
+                        container_id="FT-03-GAP",
+                        sku=report.sku,
+                        ean=profile.get("ean", ""),
+                        zone="Shop Floor / Backroom",
+                        units=unlogged,
+                        status="Gap Scan Recommended",
+                        message=(
+                            f"Offline partial fill for {profile.get('name', report.sku)}: "
+                            f"expected {report.expected_units}, recorded {report.recorded_shelf_units} "
+                            f"to shelf (delta {variance_delta} units). "
+                            f"{unlogged} unit(s) unlogged as backstock return — Gap Scan Recommended."
+                        ),
+                    )
+                )
+
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
 
     def resolve_event(self, event: ResolutionEvent) -> TelemetryResponse:
         with self._lock:
@@ -366,6 +567,15 @@ class WipEngine:
                 metrics=self.metrics.model_copy(deep=True),
                 containers={cid: c.model_copy(deep=True) for cid, c in self.containers.items()},
                 active_exceptions=[exc.model_copy(deep=True) for exc in self.active_exceptions],
+                offline_fill_audit=[
+                    entry.model_copy(deep=True) for entry in self.offline_fill_ledger
+                ],
+                inventory_gap_audit=[
+                    entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
+                ],
+                manifest_auto_confirm_audit=[
+                    entry.model_copy(deep=True) for entry in self.manifest_auto_confirm_ledger
+                ],
             )
 
 
