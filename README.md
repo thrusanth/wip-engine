@@ -29,15 +29,21 @@ The two containers are orchestrated via `docker-compose.yml` on a custom bridge 
 
 To run the full decoupled architecture locally using Docker Compose:
 
-### 1. Start the Stack
+1. **Clone and checkout the branch:**
+   ```bash
+   git clone [https://github.com/thrusanth/wip_engine.git](https://github.com/thrusanth/wip_engine.git)
+   cd wip_engine
+   git checkout cursor/simplify-phantom-drift-logic-c4d8
+   
+### 2. Start the Stack
 
 Clone the repository and spin up the containers in detached mode:
 
 ```bash
-sudo docker-compose up --build -d
+docker compose up --build -d
 ```
 
-### 2. Access the Application
+### 3. Access the Application
 
 Once the containers are built and running, you can access the services in your browser:
 
