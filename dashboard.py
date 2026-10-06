@@ -70,6 +70,8 @@ def fetch_telemetry():
 _DASHBOARD_CONTAINERS_KEY = "dashboard_containers"
 _DASHBOARD_METRICS_KEY = "dashboard_metrics"
 _DASHBOARD_OFFLINE_FILLS_KEY = "dashboard_offline_fill_audit"
+_DASHBOARD_INVENTORY_GAP_KEY = "dashboard_inventory_gap_audit"
+_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY = "dashboard_offline_gap_exceptions"
 _USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
 
 OFFLINE_FILL_AUDIT_SKU = "PASTA-CASE-12"
@@ -77,11 +79,33 @@ OFFLINE_FILL_AUDIT_ACTION = "fill"
 OFFLINE_FILL_AUDIT_QUANTITY = 12
 
 
+def _is_offline_gap_exception(exc: dict) -> bool:
+    if exc.get("status") == "Gap Scan Recommended":
+        return True
+    message = (exc.get("message") or "").lower()
+    return "gap scan recommended" in message
+
+
+def _extract_offline_recovery_payload(payload: dict) -> tuple[list, list, list]:
+    """Offline recovery data only — kept separate from live flattop telemetry."""
+    offline_fill_audit = payload.get("offline_fill_audit", [])
+    inventory_gap_audit = payload.get("inventory_gap_audit", [])
+    offline_gap_exceptions = [
+        exc
+        for exc in payload.get("active_exceptions", [])
+        if _is_offline_gap_exception(exc)
+    ]
+    return offline_fill_audit, inventory_gap_audit, offline_gap_exceptions
+
+
 def _persist_dashboard_telemetry(payload: dict) -> None:
     """Store latest telemetry in session so cards re-render with updated metrics."""
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = payload.get("containers", {})
     st.session_state[_DASHBOARD_METRICS_KEY] = payload.get("metrics", {})
-    st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = payload.get("offline_fill_audit", [])
+    offline_fills, gap_audit, gap_exceptions = _extract_offline_recovery_payload(payload)
+    st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fills
+    st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = gap_audit
+    st.session_state[_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY] = gap_exceptions
     st.session_state[_USE_CACHED_TELEMETRY_KEY] = True
 
 
@@ -144,13 +168,17 @@ try:
             "pending_edge_tasks": 0,
         }
         offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
+        inventory_gap_audit = st.session_state.get(_DASHBOARD_INVENTORY_GAP_KEY, [])
+        offline_gap_exceptions = st.session_state.get(_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY, [])
     else:
         telemetry_data = fetch_telemetry()
 
         if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
             metrics = telemetry_data["metrics"]
             containers = telemetry_data.get("containers", {})
-            offline_fill_audit = telemetry_data.get("offline_fill_audit", [])
+            offline_fill_audit, inventory_gap_audit, offline_gap_exceptions = (
+                _extract_offline_recovery_payload(telemetry_data)
+            )
         else:
             st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
             metrics = {
@@ -162,10 +190,14 @@ try:
             }
             containers = {}
             offline_fill_audit = []
+            inventory_gap_audit = []
+            offline_gap_exceptions = []
 
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
     st.session_state[_DASHBOARD_METRICS_KEY] = metrics
     st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fill_audit
+    st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = inventory_gap_audit
+    st.session_state[_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY] = offline_gap_exceptions
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
@@ -222,10 +254,15 @@ with tab2:
     st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
 with tab3:
+    st.markdown(
+        "Post-blackout recovery review — synced offline fills and partial-fill gap exceptions. "
+        "Live shop-floor telemetry remains on **Telemetry & Exceptions**."
+    )
+
     st.subheader("Post-Blackout Offline Fill Audit")
     st.caption(
-        "Central ledger view of edge-buffer fills replayed after connectivity returns. "
-        "Use this tab to verify reconciliations for buffered frontline tasks."
+        "Central ledger view of edge-buffer fills replayed after connectivity returns "
+        "(full case syncs such as PASTA-CASE-12)."
     )
 
     show_all_offline_fills = st.checkbox(
@@ -289,8 +326,103 @@ with tab3:
     else:
         st.info(
             "No synced offline fill events in the central ledger yet. "
-            f"Run `python3 ft-05_offline_recovery.py` after a blackout to replay "
+            f"Run `python3 ft-03.py` (Scenario 1) after a blackout to replay "
             f"{OFFLINE_FILL_AUDIT_SKU} ({OFFLINE_FILL_AUDIT_ACTION}) events."
+        )
+
+    st.divider()
+    st.subheader("Offline Partial Fill & Gap Scan Exceptions")
+    st.caption(
+        "Partial offline shelf fills with unlogged backstock variance. "
+        "Review gap-scan recommendations alongside synced fill rows above."
+    )
+
+    gap_exception_by_sku = {
+        exc.get("sku"): exc for exc in offline_gap_exceptions if exc.get("sku")
+    }
+
+    if inventory_gap_audit:
+        gap_rows = []
+        for row in inventory_gap_audit:
+            sku = row.get("sku", "")
+            exc = gap_exception_by_sku.get(sku, {})
+            gap_rows.append(
+                {
+                    "timestamp": row.get("timestamp", ""),
+                    "sku": sku,
+                    "name": row.get("name") or sku,
+                    "expected_units": row.get("expected_units"),
+                    "recorded_units": row.get("recorded_units"),
+                    "variance_delta": row.get("variance_delta"),
+                    "missing_units": row.get("unlogged_backstock_units"),
+                    "action": row.get("action", ""),
+                    "status": row.get("status", "Gap Scan Recommended"),
+                    "exception_message": exc.get("message", ""),
+                }
+            )
+
+        gap_df = pd.DataFrame(gap_rows)
+        gap_display = gap_df.rename(
+            columns={
+                "timestamp": "Timestamp",
+                "sku": "SKU",
+                "name": "Product Name",
+                "expected_units": "Expected Units",
+                "recorded_units": "Recorded Shelf Units",
+                "variance_delta": "Variance Delta",
+                "missing_units": "Unlogged Backstock (Missing)",
+                "action": "Action",
+                "status": "Status",
+                "exception_message": "Exception Detail",
+            }
+        )
+        gap_column_order = [
+            "Timestamp",
+            "SKU",
+            "Product Name",
+            "Expected Units",
+            "Recorded Shelf Units",
+            "Variance Delta",
+            "Unlogged Backstock (Missing)",
+            "Action",
+            "Status",
+            "Exception Detail",
+        ]
+        gap_display = gap_display[
+            [col for col in gap_column_order if col in gap_display.columns]
+        ].sort_values("Timestamp", ascending=False)
+
+        gap_col1, gap_col2, gap_col3 = st.columns(3)
+        with gap_col1:
+            st.metric("Gap Scan Cases", len(gap_display))
+        with gap_col2:
+            st.metric(
+                "Total Missing Units",
+                int(gap_display["Unlogged Backstock (Missing)"].sum())
+                if "Unlogged Backstock (Missing)" in gap_display.columns
+                else 0,
+            )
+        with gap_col3:
+            st.metric("Open Gap Scans", gap_display["SKU"].nunique())
+
+        st.dataframe(gap_display, use_container_width=True, hide_index=True)
+    elif offline_gap_exceptions:
+        exc_df = pd.DataFrame(offline_gap_exceptions)
+        exc_display = exc_df.rename(
+            columns={
+                "sku": "SKU",
+                "units": "Unlogged Backstock (Missing)",
+                "status": "Status",
+                "message": "Exception Detail",
+                "zone": "Zone",
+            }
+        )
+        st.dataframe(exc_display, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "No offline partial-fill gap exceptions in the central ledger. "
+            "Run `python3 ft-03.py` (Scenario 2) to simulate RICE-CASE-6 "
+            "(Expected 6, Recorded 4, Delta -2)."
         )
 
 st.divider()

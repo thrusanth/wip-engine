@@ -85,6 +85,7 @@ class ActiveException(BaseModel):
     zone: str
     units: int = Field(..., ge=0)
     message: str
+    status: str = ""
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("ean")
@@ -123,6 +124,30 @@ class OfflineFillAuditEntry(BaseModel):
     timestamp: str
     sync_status: str = "Synced / Offline Fill"
 
+
+class OfflinePartialFillReport(BaseModel):
+    """Post-blackout reconciliation when shelf fills do not match case manifest."""
+    batch_id: str
+    sku: str
+    expected_units: int = Field(..., ge=1)
+    recorded_shelf_units: int = Field(..., ge=0)
+    action: str = "fill"
+    timestamp: str
+
+
+class InventoryGapAuditEntry(BaseModel):
+    """Ledger row for unlogged backstock / gap-scan exceptions after partial offline fills."""
+    batch_id: str
+    sku: str
+    name: str = ""
+    expected_units: int
+    recorded_units: int
+    variance_delta: int
+    unlogged_backstock_units: int
+    action: str
+    timestamp: str
+    status: str = "Gap Scan Recommended"
+
 # ---------------------------------------------------------
 # Metrics Models (Output)
 # ---------------------------------------------------------
@@ -140,3 +165,4 @@ class TelemetryResponse(BaseModel):
     containers: Dict[str, ContainerState]
     active_exceptions: List[ActiveException] = Field(default_factory=list)
     offline_fill_audit: List[OfflineFillAuditEntry] = Field(default_factory=list)
+    inventory_gap_audit: List[InventoryGapAuditEntry] = Field(default_factory=list)

@@ -15,7 +15,9 @@ from models.schemas import (
     ExceptionKind,
     FillTelemetryEvent,
     GlobalMetrics,
+    InventoryGapAuditEntry,
     OfflineFillAuditEntry,
+    OfflinePartialFillReport,
     ResolutionEvent,
     ResolutionType,
     SkuState,
@@ -30,6 +32,8 @@ class WipEngine:
         self.containers: Dict[str, ContainerState] = {}
         self.processed_fill_event_ids: set[str] = set()
         self.offline_fill_ledger: List[OfflineFillAuditEntry] = []
+        self.inventory_gap_ledger: List[InventoryGapAuditEntry] = []
+        self.processed_gap_batch_ids: set[str] = set()
         self.active_exceptions: List[ActiveException] = []
         self.metrics = GlobalMetrics()
         self._pending_delivery_cages = 4
@@ -240,6 +244,13 @@ class WipEngine:
                 if exc.kind in (ExceptionKind.CAGE_DISCREPANCY, ExceptionKind.SKU_VARIANCE):
                     exceptions.append(exc)
 
+        # Preserve offline partial-fill gap scans (not derived from container SKU state).
+        existing_ids = {exc.id for exc in exceptions}
+        for exc in self.active_exceptions:
+            if exc.status == "Gap Scan Recommended" and exc.id not in existing_ids:
+                exceptions.append(exc)
+                existing_ids.add(exc.id)
+
         self.active_exceptions = exceptions
 
     def apply_simulated_tick(self) -> None:
@@ -324,6 +335,9 @@ class WipEngine:
                 offline_fill_audit=[
                     entry.model_copy(deep=True) for entry in self.offline_fill_ledger
                 ],
+                inventory_gap_audit=[
+                    entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
+                ],
             )
 
     def process_fill_event(self, event: FillTelemetryEvent) -> TelemetryResponse:
@@ -354,6 +368,61 @@ class WipEngine:
                         sku_state.cv_filled += 1
                     else:
                         sku_state.worked += 1
+
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
+
+    def process_offline_partial_fill_gap(
+        self, report: OfflinePartialFillReport
+    ) -> TelemetryResponse:
+        """Flag unlogged backstock after a partial offline shelf fill (gap scan)."""
+        with self._lock:
+            if report.batch_id in self.processed_gap_batch_ids:
+                return self.get_telemetry()
+
+            unlogged = report.expected_units - report.recorded_shelf_units
+            if unlogged < 0:
+                raise ValueError(
+                    "recorded_shelf_units cannot exceed expected_units for gap reconciliation"
+                )
+
+            profile = get_sku_profile(report.sku)
+            variance_delta = report.recorded_shelf_units - report.expected_units
+            self.processed_gap_batch_ids.add(report.batch_id)
+
+            if unlogged > 0:
+                gap_entry = InventoryGapAuditEntry(
+                    batch_id=report.batch_id,
+                    sku=report.sku,
+                    name=profile.get("name", report.sku),
+                    expected_units=report.expected_units,
+                    recorded_units=report.recorded_shelf_units,
+                    variance_delta=variance_delta,
+                    unlogged_backstock_units=unlogged,
+                    action=report.action,
+                    timestamp=report.timestamp,
+                    status="Gap Scan Recommended",
+                )
+                self.inventory_gap_ledger.append(gap_entry)
+                self.active_exceptions.append(
+                    ActiveException(
+                        id=f"wip-gap-{report.batch_id}",
+                        kind=ExceptionKind.UNTRACKED_BACKSTOCK,
+                        container_id="FT-03-GAP",
+                        sku=report.sku,
+                        ean=profile.get("ean", ""),
+                        zone="Shop Floor / Backroom",
+                        units=unlogged,
+                        status="Gap Scan Recommended",
+                        message=(
+                            f"Offline partial fill for {profile.get('name', report.sku)}: "
+                            f"expected {report.expected_units}, recorded {report.recorded_shelf_units} "
+                            f"to shelf (delta {variance_delta} units). "
+                            f"{unlogged} unit(s) unlogged as backstock return — Gap Scan Recommended."
+                        ),
+                    )
+                )
 
             self._recalculate_all()
             self._sync_active_exceptions()
@@ -407,6 +476,9 @@ class WipEngine:
                 active_exceptions=[exc.model_copy(deep=True) for exc in self.active_exceptions],
                 offline_fill_audit=[
                     entry.model_copy(deep=True) for entry in self.offline_fill_ledger
+                ],
+                inventory_gap_audit=[
+                    entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
                 ],
             )
 
