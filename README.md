@@ -32,9 +32,9 @@ To run the full decoupled architecture locally using Docker Compose:
 
 1. **Clone and checkout the branch:**
    ```bash
-   git clone [https://github.com/thrusanth/wip_engine.git](https://github.com/thrusanth/wip_engine.git)
-   cd wip_engine
-   git checkout cursor/simplify-phantom-drift-logic-c4d8
+   git clone https://github.com/thrusanth/wip-engine.git
+   cd wip-engine
+   git checkout cursor/part-5-edge-buffer-eb5e
 
 ### 2. Start the Stack
 
