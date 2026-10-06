@@ -29,10 +29,11 @@ The two containers are orchestrated via `docker-compose.yml` on a custom bridge 
 
 To run the full decoupled architecture locally using Docker Compose:
 
-1. **Clone the repository:**
+1. **Clone and checkout the branch:**
    ```bash
    git clone [https://github.com/thrusanth/wip_engine.git](https://github.com/thrusanth/wip_engine.git)
    cd wip_engine
+   git checkout cursor/simplify-phantom-drift-logic-c4d8
 
 ### 2. Start the Stack
 
