@@ -1,6 +1,7 @@
+import os
 import sqlite3
 
-DB_PATH = "edge_buffer.db"
+DB_PATH = os.getenv("EDGE_BUFFER_PATH", "edge_buffer.db")
 
 
 def init_edge_buffer(db_path: str = DB_PATH) -> sqlite3.Connection:
@@ -19,6 +20,11 @@ def init_edge_buffer(db_path: str = DB_PATH) -> sqlite3.Connection:
         """
     )
     return conn
+
+
+def ensure_edge_buffer(db_path: str = DB_PATH) -> sqlite3.Connection:
+    """Initialize the local edge buffer if it does not exist yet."""
+    return init_edge_buffer(db_path)
 
 
 if __name__ == "__main__":

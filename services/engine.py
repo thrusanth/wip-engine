@@ -1,5 +1,14 @@
 from typing import Dict, List
-from models.schemas import ContainerState, ContainerStatus, SkuState, GlobalMetrics, TelemetryResponse, ResolutionEvent, ResolutionType
+from models.schemas import (
+    ContainerState,
+    ContainerStatus,
+    SkuState,
+    GlobalMetrics,
+    TelemetryResponse,
+    ResolutionEvent,
+    ResolutionType,
+    FillTelemetryEvent,
+)
 
 class WipEngine:
     def __init__(self):
@@ -12,6 +21,7 @@ class WipEngine:
         
         # In-memory database
         self.containers: Dict[str, ContainerState] = {}
+        self.processed_fill_event_ids: set[str] = set()
         self._initialize_mock_data()
 
     def _initialize_mock_data(self):
@@ -124,6 +134,25 @@ class WipEngine:
             metrics=self.metrics,
             containers=self.containers
         )
+
+    def process_fill_event(self, event: FillTelemetryEvent) -> TelemetryResponse:
+        """Applies an idempotent CV fill / shelf decrement from an edge telemetry client."""
+        if event.event_id in self.processed_fill_event_ids:
+            return self.get_telemetry()
+
+        self.processed_fill_event_ids.add(event.event_id)
+
+        for container in self.containers.values():
+            for sku_state in container.skus:
+                if sku_state.sku != event.sku:
+                    continue
+                if event.action == "decrement":
+                    sku_state.cv_filled += 1
+                else:
+                    sku_state.worked += 1
+
+        self._recalculate_all()
+        return self.get_telemetry()
 
     def resolve_event(self, event: ResolutionEvent) -> TelemetryResponse:
         """Processes a shift leader resolution event and updates the system state."""

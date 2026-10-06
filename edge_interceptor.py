@@ -1,11 +1,21 @@
-import sqlite3
+import os
 import uuid
 from datetime import datetime, timezone
 
 import requests
+from dotenv import load_dotenv
 
-DB_PATH = "edge_buffer.db"
-BACKEND_URL = "http://127.0.0.1:8000/api/v1/telemetry/fill"
+from edge_database import DB_PATH, ensure_edge_buffer
+from routers.telemetry import FILL_ROUTE, router as telemetry_router
+
+load_dotenv()
+
+_default_host = os.getenv("API_HOST", "127.0.0.1")
+_default_port = os.getenv("API_PORT", "8000")
+_default_central_ledger_url = (
+    f"http://{_default_host}:{_default_port}{telemetry_router.prefix}{FILL_ROUTE}"
+)
+BACKEND_URL = os.getenv("CENTRAL_LEDGER_URL", _default_central_ledger_url)
 
 
 def emit_fill_event(sku: str, action: str = "decrement") -> None:
@@ -22,13 +32,11 @@ def emit_fill_event(sku: str, action: str = "decrement") -> None:
         response = requests.post(BACKEND_URL, json=payload, timeout=1.0)
         response.raise_for_status()
         print(f"Successfully emitted fill event {event_id} for SKU {sku}.")
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+    except requests.exceptions.RequestException:
         print(
             f"Network outage detected — caching event {event_id} locally for later sync."
         )
-        conn = sqlite3.connect(DB_PATH, isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
+        conn = ensure_edge_buffer(DB_PATH)
         conn.execute(
             """
             INSERT OR IGNORE INTO event_queue (event_id, sku, action, timestamp, status)
@@ -40,6 +48,7 @@ def emit_fill_event(sku: str, action: str = "decrement") -> None:
 
 
 if __name__ == "__main__":
+    ensure_edge_buffer()
     print(
         "Simulation: rapid fill events during network outage (backend may be unreachable)."
     )

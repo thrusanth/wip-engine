@@ -57,6 +57,13 @@ class ResolutionEvent(BaseModel):
     resolution_type: ResolutionType
     recovered_units: int = 0
 
+class FillTelemetryEvent(BaseModel):
+    """Payload from edge clients when a shelf fill / POS decrement is observed."""
+    event_id: str
+    sku: str
+    action: str = "decrement"
+    timestamp: str
+
 # ---------------------------------------------------------
 # Metrics Models (Output)
 # ---------------------------------------------------------

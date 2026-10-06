@@ -1,14 +1,24 @@
-import sqlite3
+import os
 import time
 
 import requests
+from dotenv import load_dotenv
 
-DB_PATH = "edge_buffer.db"
-BACKEND_URL = "http://127.0.0.1:8000/api/v1/telemetry/fill"
+from edge_database import DB_PATH, ensure_edge_buffer
+from routers.telemetry import FILL_ROUTE, router as telemetry_router
+
+load_dotenv()
+
+_default_host = os.getenv("API_HOST", "127.0.0.1")
+_default_port = os.getenv("API_PORT", "8000")
+_default_central_ledger_url = (
+    f"http://{_default_host}:{_default_port}{telemetry_router.prefix}{FILL_ROUTE}"
+)
+BACKEND_URL = os.getenv("CENTRAL_LEDGER_URL", _default_central_ledger_url)
 
 
 def flush_pending_events() -> None:
-    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    conn = ensure_edge_buffer(DB_PATH)
     cursor = conn.execute(
         """
         SELECT event_id, sku, action, timestamp
@@ -40,14 +50,17 @@ def flush_pending_events() -> None:
                 (event_id,),
             )
             print(f"Successfully synced event {event_id} to central ledger.")
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-            print("Network still unreachable — pausing flush until next poll cycle.")
+        except requests.exceptions.RequestException as e:
+            print(
+                f'Sync failed: {e} - Response: {getattr(e.response, "text", "no response")}'
+            )
             break
 
     conn.close()
 
 
 if __name__ == "__main__":
+    ensure_edge_buffer()
     print("Starting Edge Recovery Worker. Press Ctrl+C to stop.")
     try:
         while True:
