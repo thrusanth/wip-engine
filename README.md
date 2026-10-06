@@ -28,9 +28,6 @@ The two containers are orchestrated via `docker-compose.yml` on a custom bridge 
 ## Getting Started
 
 To run the full decoupled architecture locally using Docker Compose:
-## Getting Started
-
-To run the full decoupled architecture locally using Docker Compose:
 
 1. **Clone the repository:**
    ```bash
