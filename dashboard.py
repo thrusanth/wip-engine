@@ -1,3 +1,4 @@
+import html
 import os
 
 import pandas as pd
@@ -39,6 +40,43 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
 }
 div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) button:hover {
     background-color: #0b5ed7 !important; border-color: #0a58ca !important;
+}
+
+/* Shared execution + offline card pills */
+.exec-pill {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0.15rem 0.35rem 0.15rem 0;
+    vertical-align: middle;
+}
+.exec-pill-sku {
+    background: rgba(13, 110, 253, 0.12);
+    color: #0a58ca;
+    border: 1px solid rgba(13, 110, 253, 0.22);
+}
+.exec-pill-ean {
+    background: rgba(108, 117, 125, 0.12);
+    color: #495057;
+    border: 1px solid rgba(108, 117, 125, 0.22);
+}
+.exec-pill-status-verified {
+    background: rgba(25, 135, 84, 0.14);
+    color: #157347;
+    border: 1px solid rgba(25, 135, 84, 0.25);
+}
+.exec-pill-status-gap {
+    background: rgba(255, 193, 7, 0.22);
+    color: #946200;
+    border: 1px solid rgba(255, 193, 7, 0.35);
+}
+.exec-pill-status-pending {
+    background: rgba(13, 110, 253, 0.1);
+    color: #0a58ca;
+    border: 1px solid rgba(13, 110, 253, 0.2);
 }
 </style>
 """,
@@ -237,6 +275,186 @@ for container_id, container in containers.items():
             }
         )
 
+FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
+
+OFFLINE_CASE_EXPECTED_UNITS = {
+    OFFLINE_FILL_AUDIT_SKU: OFFLINE_FILL_AUDIT_QUANTITY,
+    "RICE-CASE-6": 6,
+}
+
+
+def render_execution_sku_profile(name: str, sku: str, ean: str = "") -> None:
+    """SKU profile row shared by live execution cards and offline review cards."""
+    ean_display = ean or "—"
+    st.markdown(
+        f"**SKU Profile:** {html.escape(name)}  \n"
+        f'<span class="exec-pill exec-pill-sku">{html.escape(sku)}</span>'
+        f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>',
+        unsafe_allow_html=True,
+    )
+
+
+def _execution_status_pill_class(status: str) -> str:
+    if status == "Verified":
+        return "exec-pill-status-verified"
+    if status == "Gap Scan Recommended":
+        return "exec-pill-status-gap"
+    return "exec-pill-status-pending"
+
+
+def render_execution_status_pill(status: str, label: str | None = None) -> None:
+    text = html.escape(label or status)
+    pill_class = _execution_status_pill_class(status)
+    st.markdown(
+        f'<span class="exec-pill {pill_class}">{text}</span>',
+        unsafe_allow_html=True,
+    )
+
+
+def _offline_case_expected_units(sku: str, reconciled_units: int) -> int:
+    return OFFLINE_CASE_EXPECTED_UNITS.get(sku, reconciled_units)
+
+
+def _build_offline_full_sync_cards(audit_rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], dict] = {}
+    for row in audit_rows:
+        sku = row.get("sku", "")
+        action = row.get("action", "")
+        key = (sku, action)
+        if key not in grouped:
+            grouped[key] = {
+                "sku": sku,
+                "name": row.get("name") or sku,
+                "action": action,
+                "reconciled_units": 0,
+                "sync_status": row.get("sync_status", "Synced / Offline Fill"),
+                "latest_timestamp": row.get("timestamp", ""),
+            }
+        grouped[key]["reconciled_units"] += int(row.get("quantity", 1))
+        if row.get("timestamp", "") > grouped[key]["latest_timestamp"]:
+            grouped[key]["latest_timestamp"] = row.get("timestamp", "")
+
+    cards: list[dict] = []
+    for entry in grouped.values():
+        sku = entry["sku"]
+        reconciled = entry["reconciled_units"]
+        expected = _offline_case_expected_units(sku, reconciled)
+        cards.append(
+            {
+                "card_type": "full_sync",
+                "title": f"Offline Fill Review: {sku}",
+                "sku": sku,
+                "name": entry["name"],
+                "ean": "",
+                "status": "Verified" if reconciled >= expected else "Pending Verification",
+                "expected_units": expected,
+                "reconciled_units": reconciled,
+                "unlogged_backstock": max(0, expected - reconciled),
+                "variance_delta": reconciled - expected,
+                "action_status": f"{entry['action'].title()} · {entry['sync_status']}",
+                "timestamp": entry["latest_timestamp"],
+                "detail": None,
+            }
+        )
+    return cards
+
+
+def _build_offline_gap_cards(
+    inventory_gap_audit: list[dict],
+    gap_exception_by_sku: dict[str, dict],
+) -> list[dict]:
+    cards: list[dict] = []
+    for row in inventory_gap_audit:
+        sku = row.get("sku", "")
+        exc = gap_exception_by_sku.get(sku, {})
+        cards.append(
+            {
+                "card_type": "gap_scan",
+                "title": f"Partial Fill Exception: {sku}",
+                "sku": sku,
+                "name": row.get("name") or sku,
+                "ean": exc.get("ean", ""),
+                "status": row.get("status", "Gap Scan Recommended"),
+                "expected_units": int(row.get("expected_units", 0)),
+                "reconciled_units": int(row.get("recorded_units", 0)),
+                "unlogged_backstock": int(row.get("unlogged_backstock_units", 0)),
+                "variance_delta": int(row.get("variance_delta", 0)),
+                "action_status": f"{row.get('action', 'fill').title()} · Gap Scan Recommended",
+                "timestamp": row.get("timestamp", ""),
+                "detail": exc.get("message") or row.get("status", ""),
+            }
+        )
+    return cards
+
+
+def _offline_status_pill_label(status: str) -> str:
+    if status == "Verified":
+        return "Verified · Full Offline Sync"
+    if status == "Gap Scan Recommended":
+        return "Gap Scan Recommended"
+    if status == "Pending Verification":
+        return "Pending Verification"
+    return status
+
+
+def render_offline_review_card(card: dict) -> None:
+    """Offline review card — mirrors render_execution_telemetry_card structure."""
+    status = card.get("status", "")
+    variance_delta = int(card.get("variance_delta", 0))
+    unlogged = int(card.get("unlogged_backstock", 0))
+    product_name = card.get("name") or card["sku"]
+
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.subheader(card["title"])
+        subtitle_parts = []
+        if card.get("timestamp"):
+            subtitle_parts.append(f"Last ledger update: {card['timestamp']}")
+        subtitle_parts.append(card.get("action_status", ""))
+        st.caption(" | ".join(part for part in subtitle_parts if part))
+
+        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_status_pill(status, _offline_status_pill_label(status))
+
+        metrics_left, metrics_right = st.columns(2)
+        with metrics_left:
+            st.metric("Expected Units", card["expected_units"])
+            st.metric("Unlogged Backstock", unlogged)
+        with metrics_right:
+            st.metric("Worked / Reconciled Units", card["reconciled_units"])
+            st.metric("Variance Delta", variance_delta)
+
+        st.markdown("---")
+        st.caption(f"**Action Status:** {card.get('action_status', '—')}")
+
+        if status == "Verified":
+            st.success(
+                "✅ **Verified:** Full offline case sync reconciled to the central ledger."
+            )
+        elif status == "Gap Scan Recommended":
+            st.warning(
+                f"⚠️ **GAP SCAN RECOMMENDED:** {unlogged} unit(s) of '{product_name}' "
+                f"unlogged after partial offline fill (variance delta {variance_delta})."
+            )
+            if card.get("detail"):
+                st.caption(card["detail"])
+        elif status == "Pending Verification":
+            st.info("ℹ️ **Pending Verification:** Awaiting full case reconciliation.")
+        elif variance_delta < 0 or unlogged > 0:
+            st.warning(
+                f"⚠️ **ACTION REQUIRED:** {unlogged} unlogged unit(s); "
+                f"variance delta {variance_delta}. Perform a backroom gap scan."
+            )
+
+
+def render_offline_review_card_grid(cards: list[dict], *, columns: int = 3) -> None:
+    if not cards:
+        return
+    grid = st.columns(columns)
+    for index, card in enumerate(cards):
+        with grid[index % columns]:
+            render_offline_review_card(card)
+
+
 tab1, tab2, tab3 = st.tabs(["System Overview", "Telemetry & Exceptions", "Offline Fill"])
 
 with tab1:
@@ -254,19 +472,17 @@ with tab2:
     st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.markdown(
-        "Post-blackout recovery review — synced offline fills and partial-fill gap exceptions. "
-        "Live shop-floor telemetry remains on **Telemetry & Exceptions**."
+    st.caption(
+        "Post-blackout recovery review — offline fills and gap exceptions only. "
+        "Live telemetry stays on **Telemetry & Exceptions**."
     )
 
-    st.subheader("Post-Blackout Offline Fill Audit")
-    st.caption(
-        "Central ledger view of edge-buffer fills replayed after connectivity returns "
-        "(full case syncs such as PASTA-CASE-12)."
-    )
+    gap_exception_by_sku = {
+        exc.get("sku"): exc for exc in offline_gap_exceptions if exc.get("sku")
+    }
 
     show_all_offline_fills = st.checkbox(
-        "Show all synced offline fills (disable to focus pasta case scenario)",
+        "Show all synced offline fill SKUs (disable to focus pasta case scenario)",
         value=False,
         key="offline_fill_show_all",
     )
@@ -281,149 +497,55 @@ with tab3:
             and row.get("action") == OFFLINE_FILL_AUDIT_ACTION
         ]
 
-    if audit_rows:
-        audit_df = pd.DataFrame(audit_rows)
-        display_df = audit_df.rename(
-            columns={
-                "timestamp": "Timestamp",
-                "sku": "SKU",
-                "name": "Product Name",
-                "quantity": "Quantity",
-                "action": "Action",
-                "sync_status": "Sync Status",
-            }
-        )
-        column_order = [
-            "Timestamp",
-            "SKU",
-            "Product Name",
-            "Quantity",
-            "Action",
-            "Sync Status",
-        ]
-        display_df = display_df[[col for col in column_order if col in display_df.columns]]
-        display_df = display_df.sort_values("Timestamp", ascending=False)
+    full_sync_cards = _build_offline_full_sync_cards(audit_rows)
+    gap_cards = _build_offline_gap_cards(inventory_gap_audit, gap_exception_by_sku)
 
-        total_units = int(display_df["Quantity"].sum()) if "Quantity" in display_df.columns else 0
-        summary_col1, summary_col2, summary_col3 = st.columns(3)
+    if not full_sync_cards and not gap_cards:
+        st.markdown("#### Awaiting offline fill data")
+        st.caption(
+            "Run `python3 ft-03.py` to populate offline audit and exception cards."
+        )
+    else:
+        summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
         with summary_col1:
-            st.metric("Ledger Events", len(display_df))
+            st.metric("Full Sync", len(full_sync_cards), label_visibility="visible")
         with summary_col2:
-            st.metric("Total Units Reconciled", total_units)
-        with summary_col3:
-            if not show_all_offline_fills:
-                target_met = total_units >= OFFLINE_FILL_AUDIT_QUANTITY
-                st.metric(
-                    "Pasta Case Target (12)",
-                    f"{total_units} / {OFFLINE_FILL_AUDIT_QUANTITY}",
-                    delta="Verified" if target_met else "Pending",
-                    delta_color="normal" if target_met else "inverse",
-                )
-            else:
-                st.metric("Distinct SKUs", display_df["SKU"].nunique())
-
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-    else:
-        st.info(
-            "No synced offline fill events in the central ledger yet. "
-            f"Run `python3 ft-03.py` (Scenario 1) after a blackout to replay "
-            f"{OFFLINE_FILL_AUDIT_SKU} ({OFFLINE_FILL_AUDIT_ACTION}) events."
-        )
-
-    st.divider()
-    st.subheader("Offline Partial Fill & Gap Scan Exceptions")
-    st.caption(
-        "Partial offline shelf fills with unlogged backstock variance. "
-        "Review gap-scan recommendations alongside synced fill rows above."
-    )
-
-    gap_exception_by_sku = {
-        exc.get("sku"): exc for exc in offline_gap_exceptions if exc.get("sku")
-    }
-
-    if inventory_gap_audit:
-        gap_rows = []
-        for row in inventory_gap_audit:
-            sku = row.get("sku", "")
-            exc = gap_exception_by_sku.get(sku, {})
-            gap_rows.append(
-                {
-                    "timestamp": row.get("timestamp", ""),
-                    "sku": sku,
-                    "name": row.get("name") or sku,
-                    "expected_units": row.get("expected_units"),
-                    "recorded_units": row.get("recorded_units"),
-                    "variance_delta": row.get("variance_delta"),
-                    "missing_units": row.get("unlogged_backstock_units"),
-                    "action": row.get("action", ""),
-                    "status": row.get("status", "Gap Scan Recommended"),
-                    "exception_message": exc.get("message", ""),
-                }
-            )
-
-        gap_df = pd.DataFrame(gap_rows)
-        gap_display = gap_df.rename(
-            columns={
-                "timestamp": "Timestamp",
-                "sku": "SKU",
-                "name": "Product Name",
-                "expected_units": "Expected Units",
-                "recorded_units": "Recorded Shelf Units",
-                "variance_delta": "Variance Delta",
-                "missing_units": "Unlogged Backstock (Missing)",
-                "action": "Action",
-                "status": "Status",
-                "exception_message": "Exception Detail",
-            }
-        )
-        gap_column_order = [
-            "Timestamp",
-            "SKU",
-            "Product Name",
-            "Expected Units",
-            "Recorded Shelf Units",
-            "Variance Delta",
-            "Unlogged Backstock (Missing)",
-            "Action",
-            "Status",
-            "Exception Detail",
-        ]
-        gap_display = gap_display[
-            [col for col in gap_column_order if col in gap_display.columns]
-        ].sort_values("Timestamp", ascending=False)
-
-        gap_col1, gap_col2, gap_col3 = st.columns(3)
-        with gap_col1:
-            st.metric("Gap Scan Cases", len(gap_display))
-        with gap_col2:
             st.metric(
-                "Total Missing Units",
-                int(gap_display["Unlogged Backstock (Missing)"].sum())
-                if "Unlogged Backstock (Missing)" in gap_display.columns
-                else 0,
+                "Reconciled Units",
+                sum(card["reconciled_units"] for card in full_sync_cards),
             )
-        with gap_col3:
-            st.metric("Open Gap Scans", gap_display["SKU"].nunique())
+        with summary_col3:
+            st.metric("Gap Cases", len(gap_cards))
+        with summary_col4:
+            st.metric(
+                "Unlogged",
+                sum(card["unlogged_backstock"] for card in gap_cards),
+            )
 
-        st.dataframe(gap_display, use_container_width=True, hide_index=True)
-    elif offline_gap_exceptions:
-        exc_df = pd.DataFrame(offline_gap_exceptions)
-        exc_display = exc_df.rename(
-            columns={
-                "sku": "SKU",
-                "units": "Unlogged Backstock (Missing)",
-                "status": "Status",
-                "message": "Exception Detail",
-                "zone": "Zone",
-            }
-        )
-        st.dataframe(exc_display, use_container_width=True, hide_index=True)
-    else:
-        st.info(
-            "No offline partial-fill gap exceptions in the central ledger. "
-            "Run `python3 ft-03.py` (Scenario 2) to simulate RICE-CASE-6 "
-            "(Expected 6, Recorded 4, Delta -2)."
-        )
+        if full_sync_cards:
+            st.subheader("Post-Blackout Offline Fill Audit")
+            st.caption("Full edge-buffer replays reconciled to the central ledger.")
+            render_offline_review_card_grid(full_sync_cards, columns=3)
+
+        if gap_cards:
+            st.subheader("Offline Partial Fill & Gap Scan Exceptions")
+            st.caption(
+                "Partial fills with unlogged backstock "
+                "(e.g. RICE-CASE-6: 6 expected · 4 recorded · −2 delta)."
+            )
+            render_offline_review_card_grid(gap_cards, columns=3)
+
+        with st.expander("Raw ledger rows (audit trail)"):
+            if audit_rows:
+                st.markdown("**Synced offline fill events**")
+                st.dataframe(pd.DataFrame(audit_rows), use_container_width=True, hide_index=True)
+            if inventory_gap_audit:
+                st.markdown("**Inventory gap ledger**")
+                st.dataframe(
+                    pd.DataFrame(inventory_gap_audit),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 st.divider()
 
@@ -564,9 +686,6 @@ def build_tasks(containers_dict: dict) -> list[dict]:
     return tasks
 
 
-FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
-
-
 def render_execution_telemetry_card(task: dict) -> None:
     """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
     container_data = _container_view_from_task(task)
@@ -576,11 +695,7 @@ def render_execution_telemetry_card(task: dict) -> None:
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
         st.subheader(f"Execution Telemetry: {container_data['id']}")
         st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
-        st.markdown(
-            f"**SKU Profile:** {product_name}  \n"
-            f"`{sku_data['sku']}`  \n"
-            f"**EAN:** `{sku_data.get('ean', '')}`"
-        )
+        render_execution_sku_profile(product_name, sku_data["sku"], sku_data.get("ean", ""))
 
         metrics_left, metrics_right = st.columns(2)
         with metrics_left:
