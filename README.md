@@ -34,7 +34,6 @@ To run the full decoupled architecture locally using Docker Compose:
    ```bash
    git clone https://github.com/thrusanth/wip-engine.git
    cd wip-engine
-   git checkout cursor/part-5-edge-buffer-eb5e
 
 ### 2. Start the Stack
 
