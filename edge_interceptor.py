@@ -6,14 +6,14 @@ import requests
 from dotenv import load_dotenv
 
 from edge_database import DB_PATH, ensure_edge_buffer
-from routers.telemetry import FILL_ROUTE, router as telemetry_router
 
 load_dotenv()
 
+TELEMETRY_FILL_PATH = "/api/v1/telemetry/fill"
 _default_host = os.getenv("API_HOST", "127.0.0.1")
 _default_port = os.getenv("API_PORT", "8000")
 _default_central_ledger_url = (
-    f"http://{_default_host}:{_default_port}{telemetry_router.prefix}{FILL_ROUTE}"
+    f"http://{_default_host}:{_default_port}{TELEMETRY_FILL_PATH}"
 )
 BACKEND_URL = os.getenv("CENTRAL_LEDGER_URL", _default_central_ledger_url)
 
