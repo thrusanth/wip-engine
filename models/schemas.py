@@ -179,6 +179,25 @@ class InventoryGapAuditEntry(BaseModel):
     timestamp: str
     status: str = "Gap Scan Recommended"
 
+
+class SKUVisualSignature(BaseModel):
+    """Localized visual feature row cached on the edge after a cloud teach pass."""
+
+    sku_id: str
+    ean: str = ""
+    feature_hash: str
+    confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+
+class OfflineDetectionEvent(BaseModel):
+    """Append-only edge detection emitted while the camera runs in disconnected autonomy."""
+
+    timestamp: str
+    sku_id: str
+    detected_quantity: int = Field(..., ge=0)
+    status: str = "[STATE: DISCONNECTED_AUTONOMY]"
+
+
 # ---------------------------------------------------------
 # Metrics Models (Output)
 # ---------------------------------------------------------
