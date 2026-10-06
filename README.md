@@ -28,8 +28,16 @@ The two containers are orchestrated via `docker-compose.yml` on a custom bridge 
 ## Getting Started
 
 To run the full decoupled architecture locally using Docker Compose:
+## Getting Started
 
-### 1. Start the Stack
+To run the full decoupled architecture locally using Docker Compose:
+
+1. **Clone the repository:**
+   ```bash
+   git clone [https://github.com/thrusanth/wip_engine.git](https://github.com/thrusanth/wip_engine.git)
+   cd wip_engine
+
+### 2. Start the Stack
 
 Clone the repository and spin up the containers in detached mode:
 
