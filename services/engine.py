@@ -15,6 +15,7 @@ from models.schemas import (
     ExceptionKind,
     FillTelemetryEvent,
     GlobalMetrics,
+    OfflineFillAuditEntry,
     ResolutionEvent,
     ResolutionType,
     SkuState,
@@ -28,6 +29,7 @@ class WipEngine:
         self._live_simulation_enabled = LIVE_SIMULATION_ENABLED
         self.containers: Dict[str, ContainerState] = {}
         self.processed_fill_event_ids: set[str] = set()
+        self.offline_fill_ledger: List[OfflineFillAuditEntry] = []
         self.active_exceptions: List[ActiveException] = []
         self.metrics = GlobalMetrics()
         self._pending_delivery_cages = 4
@@ -319,6 +321,9 @@ class WipEngine:
                 metrics=self.metrics.model_copy(deep=True),
                 containers={cid: c.model_copy(deep=True) for cid, c in self.containers.items()},
                 active_exceptions=[exc.model_copy(deep=True) for exc in self.active_exceptions],
+                offline_fill_audit=[
+                    entry.model_copy(deep=True) for entry in self.offline_fill_ledger
+                ],
             )
 
     def process_fill_event(self, event: FillTelemetryEvent) -> TelemetryResponse:
@@ -328,6 +333,18 @@ class WipEngine:
                 return self.get_telemetry()
 
             self.processed_fill_event_ids.add(event.event_id)
+            profile = get_sku_profile(event.sku)
+            self.offline_fill_ledger.append(
+                OfflineFillAuditEntry(
+                    event_id=event.event_id,
+                    sku=event.sku,
+                    name=profile.get("name", event.sku),
+                    quantity=1,
+                    action=event.action,
+                    timestamp=event.timestamp,
+                    sync_status="Synced / Offline Fill",
+                )
+            )
 
             for container in self.containers.values():
                 for sku_state in container.skus:
@@ -388,6 +405,9 @@ class WipEngine:
                 metrics=self.metrics.model_copy(deep=True),
                 containers={cid: c.model_copy(deep=True) for cid, c in self.containers.items()},
                 active_exceptions=[exc.model_copy(deep=True) for exc in self.active_exceptions],
+                offline_fill_audit=[
+                    entry.model_copy(deep=True) for entry in self.offline_fill_ledger
+                ],
             )
 
 

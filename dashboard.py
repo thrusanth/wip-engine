@@ -69,13 +69,19 @@ def fetch_telemetry():
 
 _DASHBOARD_CONTAINERS_KEY = "dashboard_containers"
 _DASHBOARD_METRICS_KEY = "dashboard_metrics"
+_DASHBOARD_OFFLINE_FILLS_KEY = "dashboard_offline_fill_audit"
 _USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
+
+OFFLINE_FILL_AUDIT_SKU = "PASTA-CASE-12"
+OFFLINE_FILL_AUDIT_ACTION = "fill"
+OFFLINE_FILL_AUDIT_QUANTITY = 12
 
 
 def _persist_dashboard_telemetry(payload: dict) -> None:
     """Store latest telemetry in session so cards re-render with updated metrics."""
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = payload.get("containers", {})
     st.session_state[_DASHBOARD_METRICS_KEY] = payload.get("metrics", {})
+    st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = payload.get("offline_fill_audit", [])
     st.session_state[_USE_CACHED_TELEMETRY_KEY] = True
 
 
@@ -137,12 +143,14 @@ try:
             "daily_shrink_cost": 0.0,
             "pending_edge_tasks": 0,
         }
+        offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
     else:
         telemetry_data = fetch_telemetry()
 
         if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
             metrics = telemetry_data["metrics"]
             containers = telemetry_data.get("containers", {})
+            offline_fill_audit = telemetry_data.get("offline_fill_audit", [])
         else:
             st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
             metrics = {
@@ -153,9 +161,11 @@ try:
                 "pending_edge_tasks": 0
             }
             containers = {}
+            offline_fill_audit = []
 
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
     st.session_state[_DASHBOARD_METRICS_KEY] = metrics
+    st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fill_audit
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
@@ -195,7 +205,7 @@ for container_id, container in containers.items():
             }
         )
 
-tab1, tab2 = st.tabs(["System Overview", "Telemetry & Exceptions"])
+tab1, tab2, tab3 = st.tabs(["System Overview", "Telemetry & Exceptions", "Offline Fill"])
 
 with tab1:
     st.markdown(
@@ -210,6 +220,78 @@ with tab2:
         "Drift", ascending=False
     )
     st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
+
+with tab3:
+    st.subheader("Post-Blackout Offline Fill Audit")
+    st.caption(
+        "Central ledger view of edge-buffer fills replayed after connectivity returns. "
+        "Use this tab to verify reconciliations for buffered frontline tasks."
+    )
+
+    show_all_offline_fills = st.checkbox(
+        "Show all synced offline fills (disable to focus pasta case scenario)",
+        value=False,
+        key="offline_fill_show_all",
+    )
+
+    if show_all_offline_fills:
+        audit_rows = list(offline_fill_audit)
+    else:
+        audit_rows = [
+            row
+            for row in offline_fill_audit
+            if row.get("sku") == OFFLINE_FILL_AUDIT_SKU
+            and row.get("action") == OFFLINE_FILL_AUDIT_ACTION
+        ]
+
+    if audit_rows:
+        audit_df = pd.DataFrame(audit_rows)
+        display_df = audit_df.rename(
+            columns={
+                "timestamp": "Timestamp",
+                "sku": "SKU",
+                "name": "Product Name",
+                "quantity": "Quantity",
+                "action": "Action",
+                "sync_status": "Sync Status",
+            }
+        )
+        column_order = [
+            "Timestamp",
+            "SKU",
+            "Product Name",
+            "Quantity",
+            "Action",
+            "Sync Status",
+        ]
+        display_df = display_df[[col for col in column_order if col in display_df.columns]]
+        display_df = display_df.sort_values("Timestamp", ascending=False)
+
+        total_units = int(display_df["Quantity"].sum()) if "Quantity" in display_df.columns else 0
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        with summary_col1:
+            st.metric("Ledger Events", len(display_df))
+        with summary_col2:
+            st.metric("Total Units Reconciled", total_units)
+        with summary_col3:
+            if not show_all_offline_fills:
+                target_met = total_units >= OFFLINE_FILL_AUDIT_QUANTITY
+                st.metric(
+                    "Pasta Case Target (12)",
+                    f"{total_units} / {OFFLINE_FILL_AUDIT_QUANTITY}",
+                    delta="Verified" if target_met else "Pending",
+                    delta_color="normal" if target_met else "inverse",
+                )
+            else:
+                st.metric("Distinct SKUs", display_df["SKU"].nunique())
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "No synced offline fill events in the central ledger yet. "
+            f"Run `python3 ft-05_offline_recovery.py` after a blackout to replay "
+            f"{OFFLINE_FILL_AUDIT_SKU} ({OFFLINE_FILL_AUDIT_ACTION}) events."
+        )
 
 st.divider()
 

@@ -112,6 +112,17 @@ class FillTelemetryEvent(BaseModel):
     action: str = "decrement"
     timestamp: str
 
+
+class OfflineFillAuditEntry(BaseModel):
+    """Central ledger record for edge-buffer fills replayed after connectivity returns."""
+    event_id: str
+    sku: str
+    name: str = ""
+    quantity: int = Field(default=1, ge=1)
+    action: str
+    timestamp: str
+    sync_status: str = "Synced / Offline Fill"
+
 # ---------------------------------------------------------
 # Metrics Models (Output)
 # ---------------------------------------------------------
@@ -128,3 +139,4 @@ class TelemetryResponse(BaseModel):
     metrics: GlobalMetrics
     containers: Dict[str, ContainerState]
     active_exceptions: List[ActiveException] = Field(default_factory=list)
+    offline_fill_audit: List[OfflineFillAuditEntry] = Field(default_factory=list)
