@@ -1,0 +1,3 @@
+# PDF export utility (export_to_pdf.py) — install separately from main app deps:
+#   pip install -r requirements-export.txt
+reportlab>=4.0.0

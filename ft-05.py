@@ -45,18 +45,21 @@ def _detail(message: str) -> None:
 
 
 def _reset_local_artifacts() -> None:
-    for path in (WEIGHTS_PATH, BUFFER_PATH):
-        if os.path.exists(path):
-            os.remove(path)
-    for suffix in ("-wal", "-shm"):
-        sidecar = f"{BUFFER_PATH}{suffix}"
-        if os.path.exists(sidecar):
-            os.remove(sidecar)
+    """Remove FT-05 JSON/SQLite artifacts (and SQLite WAL sidecars) for a clean run."""
+    targets = (
+        "local_sku_weights_ft05.json",
+        "offline_detection_buffer_ft05.db",
+        "offline_detection_buffer_ft05.db-wal",
+        "offline_detection_buffer_ft05.db-shm",
+    )
+    for name in targets:
+        path = _FT05_ROOT / name
+        if path.is_file():
+            path.unlink()
+            print(f"Removed existing artifact: {path.name}")
 
 
 async def run_edge_autonomy_lifecycle() -> None:
-    _reset_local_artifacts()
-
     _step("1/6 Script start")
     print("FT-05 Localized Edge Autonomy — execution log")
     print("Initializing EdgeInferenceEngine …")
@@ -138,6 +141,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    print("FT-05: starting from a clean slate (removing prior FT-05 cache/buffer files if present).")
+    _reset_local_artifacts()
     try:
         raise SystemExit(main())
     except Exception as exc:

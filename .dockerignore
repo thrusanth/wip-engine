@@ -1,0 +1,15 @@
+.git
+.gitignore
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.cursor/
+agent-transcripts/
+edge_buffer*.db*
+edge_buffer*.db-wal
+edge_buffer*.db-shm
+
+# FT-05 edge autonomy artifacts are intentionally NOT ignored here so they can be
+# bind-mounted from the host into the Streamlit container after `python3 ft-05.py`.

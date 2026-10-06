@@ -675,11 +675,12 @@ def _truncate_feature_hash(feature_hash: str, preview_len: int = 12) -> str:
 
 def _load_edge_visual_signature_rows(weights_path: str | Path) -> list[dict]:
     """Load itemized visual signature rows from the localized edge JSON cache."""
-    try:
-        with open(weights_path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except FileNotFoundError:
+    path = Path(weights_path)
+    if not path.is_file():
         return []
+    try:
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
     except (json.JSONDecodeError, OSError):
         return []
 
@@ -710,7 +711,7 @@ def _count_cached_visual_signatures(weights_path: str | Path) -> int:
 
 def _load_offline_detection_log_rows(db_path: str | Path) -> list[dict]:
     """Load append-only offline detection rows from the WAL buffer database."""
-    db_path = str(db_path)
+    db_path = str(Path(db_path))
     if not os.path.isfile(db_path):
         return []
     try:
@@ -864,6 +865,8 @@ with tab3:
 with tab4:
     st.subheader("Localized Edge Autonomy (Computer Vision)")
     edge_col1, edge_col2, edge_col3 = st.columns(3)
+    weights_file_exists = EDGE_AI_WEIGHTS_PATH.is_file()
+    buffer_file_exists = EDGE_AI_BUFFER_PATH.is_file()
     cached_signatures = _count_cached_visual_signatures(EDGE_AI_WEIGHTS_PATH)
     pending_offline_scans = _count_pending_offline_scans(EDGE_AI_BUFFER_PATH)
     with edge_col1:
@@ -882,7 +885,15 @@ with tab4:
     st.markdown("#### Cached Visual Signatures")
     st.caption(f"Source: `{EDGE_AI_WEIGHTS_PATH.name}`")
     if not signature_rows:
-        st.info("No edge signatures cached yet. Run `python3 ft-05.py` to teach the local visual cache.")
+        if not weights_file_exists:
+            st.info(
+                "No edge signatures cached yet — `local_sku_weights_ft05.json` was not found. "
+                "Run `python3 ft-05.py` to teach the local visual cache."
+            )
+        else:
+            st.info(
+                "No edge signatures cached yet. Run `python3 ft-05.py` to teach the local visual cache."
+            )
     else:
         if all(not (row.get("ean") or "").strip() for row in signature_rows):
             st.warning(
@@ -905,7 +916,13 @@ with tab4:
     st.markdown("#### Pending Offline Scans")
     st.caption(f"Source: `{EDGE_AI_BUFFER_PATH.name}`")
     if not offline_log_rows:
-        st.info("WAL buffer queue is empty.")
+        if not buffer_file_exists:
+            st.info(
+                "WAL buffer queue is empty — `offline_detection_buffer_ft05.db` was not found. "
+                "Run `python3 ft-05.py` to append an offline detection row."
+            )
+        else:
+            st.info("WAL buffer queue is empty.")
     else:
         st.dataframe(
             pd.DataFrame(offline_log_rows),

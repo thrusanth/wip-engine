@@ -18,6 +18,10 @@ services:
     environment:
       - API_BASE_URL=http://backend:8000/api/v1
       - WIP_API_KEY=dev-wip-engine-key
+    volumes:
+      # Host repo bind-mount: `python3 ft-05.py` writes FT-05 artifacts beside dashboard.py
+      # (local_sku_weights_ft05.json, offline_detection_buffer_ft05.db + SQLite WAL sidecars).
+      - .:/app
     command: streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
       - backend
