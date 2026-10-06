@@ -28,6 +28,16 @@
       "ean": "5012345678982",
       "name": "Microwave Rice",
       "price": 1.8
+    },
+    "WATER-CASE-24": {
+      "ean": "5012345678975",
+      "name": "Spring Water Case",
+      "price": 3.2
+    },
+    "CEREAL-CASE-10": {
+      "ean": "5012345678965",
+      "name": "Family Cereal Case",
+      "price": 2.9
     }
   }
 }

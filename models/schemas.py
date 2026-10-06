@@ -28,6 +28,10 @@ class ExceptionKind(str, Enum):
     CAGE_DISCREPANCY = "cage_discrepancy"
     SKU_VARIANCE = "sku_variance"
     UNTRACKED_BACKSTOCK = "untracked_backstock"
+    TOTAL_POWER_CUT = "total_power_cut"
+
+
+TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 
 # ---------------------------------------------------------
 # Core Domain Models
@@ -125,6 +129,33 @@ class OfflineFillAuditEntry(BaseModel):
     sync_status: str = "Synced / Offline Fill"
 
 
+class DeliveryManifestLine(BaseModel):
+    sku: str
+    expected_units: int = Field(..., ge=1)
+
+
+class IncomingDeliveryManifest(BaseModel):
+    manifest_id: str
+    zone: str = "Backroom Staging"
+    lines: List[DeliveryManifestLine]
+
+
+class TotalPowerCutEvent(BaseModel):
+    manifest_id: str
+    timestamp: str
+
+
+class ManifestAutoConfirmEntry(BaseModel):
+    """Central ledger row when a pending delivery manifest is auto-confirmed after power loss."""
+    manifest_id: str
+    sku: str
+    name: str = ""
+    expected_units: int
+    confirmed_units: int
+    timestamp: str
+    sync_status: str = "Auto-Confirmed / Total Power Cut"
+
+
 class OfflinePartialFillReport(BaseModel):
     """Post-blackout reconciliation when shelf fills do not match case manifest."""
     batch_id: str
@@ -166,3 +197,4 @@ class TelemetryResponse(BaseModel):
     active_exceptions: List[ActiveException] = Field(default_factory=list)
     offline_fill_audit: List[OfflineFillAuditEntry] = Field(default_factory=list)
     inventory_gap_audit: List[InventoryGapAuditEntry] = Field(default_factory=list)
+    manifest_auto_confirm_audit: List[ManifestAutoConfirmEntry] = Field(default_factory=list)

@@ -15,10 +15,14 @@ from models.schemas import (
     ExceptionKind,
     FillTelemetryEvent,
     GlobalMetrics,
+    IncomingDeliveryManifest,
     InventoryGapAuditEntry,
+    ManifestAutoConfirmEntry,
     OfflineFillAuditEntry,
     OfflinePartialFillReport,
     ResolutionEvent,
+    TOTAL_POWER_CUT_STATUS,
+    TotalPowerCutEvent,
     ResolutionType,
     SkuState,
     TelemetryResponse,
@@ -34,6 +38,9 @@ class WipEngine:
         self.offline_fill_ledger: List[OfflineFillAuditEntry] = []
         self.inventory_gap_ledger: List[InventoryGapAuditEntry] = []
         self.processed_gap_batch_ids: set[str] = set()
+        self.pending_delivery_manifests: Dict[str, ContainerState] = {}
+        self.processed_power_cut_manifest_ids: set[str] = set()
+        self.manifest_auto_confirm_ledger: List[ManifestAutoConfirmEntry] = []
         self.active_exceptions: List[ActiveException] = []
         self.metrics = GlobalMetrics()
         self._pending_delivery_cages = 4
@@ -251,6 +258,11 @@ class WipEngine:
                 exceptions.append(exc)
                 existing_ids.add(exc.id)
 
+        for exc in self.active_exceptions:
+            if exc.kind == ExceptionKind.TOTAL_POWER_CUT and exc.id not in existing_ids:
+                exceptions.append(exc)
+                existing_ids.add(exc.id)
+
         self.active_exceptions = exceptions
 
     def apply_simulated_tick(self) -> None:
@@ -338,7 +350,87 @@ class WipEngine:
                 inventory_gap_audit=[
                     entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
                 ],
+                manifest_auto_confirm_audit=[
+                    entry.model_copy(deep=True) for entry in self.manifest_auto_confirm_ledger
+                ],
             )
+
+    def stage_incoming_delivery_manifest(
+        self, manifest: IncomingDeliveryManifest
+    ) -> TelemetryResponse:
+        """Register a pending inbound delivery manifest awaiting breakdown."""
+        with self._lock:
+            if manifest.manifest_id in self.pending_delivery_manifests:
+                raise ValueError(f"Manifest {manifest.manifest_id} is already pending")
+            if manifest.manifest_id in self.containers:
+                raise ValueError(f"Manifest {manifest.manifest_id} already active in ledger")
+
+            skus = [
+                self._sku_state(line.sku, expected=line.expected_units)
+                for line in manifest.lines
+            ]
+            self.pending_delivery_manifests[manifest.manifest_id] = ContainerState(
+                id=manifest.manifest_id,
+                status=ContainerStatus.STAGED_IN_BACKROOM,
+                zone=manifest.zone,
+                skus=skus,
+            )
+            self._pending_delivery_cages += 1
+            self._recalculate_all()
+            return self.get_telemetry()
+
+    def apply_total_power_cut(self, event: TotalPowerCutEvent) -> TelemetryResponse:
+        """Disaster recovery: auto-confirm pending manifest and mandate full gap scan."""
+        with self._lock:
+            if event.manifest_id in self.processed_power_cut_manifest_ids:
+                return self.get_telemetry()
+
+            pending = self.pending_delivery_manifests.pop(event.manifest_id, None)
+            if pending is None:
+                raise ValueError(f"No pending manifest found for {event.manifest_id}")
+
+            pending.status = ContainerStatus.IN_PROGRESS_SHOPFLOOR
+            for sku_state in pending.skus:
+                profile = get_sku_profile(sku_state.sku)
+                confirmed_units = sku_state.expected
+                sku_state.backstock = confirmed_units
+                sku_state.confirmed_backstock = confirmed_units
+
+                self.manifest_auto_confirm_ledger.append(
+                    ManifestAutoConfirmEntry(
+                        manifest_id=event.manifest_id,
+                        sku=sku_state.sku,
+                        name=profile.get("name", sku_state.sku),
+                        expected_units=sku_state.expected,
+                        confirmed_units=confirmed_units,
+                        timestamp=event.timestamp,
+                    )
+                )
+                self.active_exceptions.append(
+                    ActiveException(
+                        id=f"wip-powercut-{event.manifest_id}-{sku_state.sku}",
+                        kind=ExceptionKind.TOTAL_POWER_CUT,
+                        container_id=event.manifest_id,
+                        sku=sku_state.sku,
+                        ean=profile.get("ean", ""),
+                        zone=pending.zone,
+                        units=confirmed_units,
+                        status=TOTAL_POWER_CUT_STATUS,
+                        message=(
+                            f"Catastrophic power loss during delivery breakdown for "
+                            f"{profile.get('name', sku_state.sku)}. Manifest auto-confirmed "
+                            f"at {confirmed_units} units without physical verification — "
+                            "mandatory full store true-up gap scan required."
+                        ),
+                    )
+                )
+
+            self.containers[event.manifest_id] = pending
+            self.processed_power_cut_manifest_ids.add(event.manifest_id)
+            self._pending_delivery_cages = max(0, self._pending_delivery_cages - 1)
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
 
     def process_fill_event(self, event: FillTelemetryEvent) -> TelemetryResponse:
         """Applies an idempotent CV fill / shelf decrement from an edge telemetry client."""
@@ -479,6 +571,9 @@ class WipEngine:
                 ],
                 inventory_gap_audit=[
                     entry.model_copy(deep=True) for entry in self.inventory_gap_ledger
+                ],
+                manifest_auto_confirm_audit=[
+                    entry.model_copy(deep=True) for entry in self.manifest_auto_confirm_ledger
                 ],
             )
 

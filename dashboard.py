@@ -53,15 +53,12 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
     margin: 0.15rem 0.35rem 0.15rem 0;
     vertical-align: middle;
 }
-.exec-pill-sku {
-    background: rgba(13, 110, 253, 0.12);
-    color: #0a58ca;
-    border: 1px solid rgba(13, 110, 253, 0.22);
-}
+/* SKU + EAN identifier pills — bright success green (matches control deck) */
+.exec-pill-sku,
 .exec-pill-ean {
-    background: rgba(108, 117, 125, 0.12);
-    color: #495057;
-    border: 1px solid rgba(108, 117, 125, 0.22);
+    background: rgba(32, 201, 151, 0.12) !important;
+    color: #20c997 !important;
+    border: 1px solid rgba(32, 201, 151, 0.55) !important;
 }
 .exec-pill-status-verified {
     background: rgba(25, 135, 84, 0.14);
@@ -77,6 +74,25 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
     background: rgba(13, 110, 253, 0.1);
     color: #0a58ca;
     border: 1px solid rgba(13, 110, 253, 0.2);
+}
+.power-cut-banner {
+    border: 2px solid #dc3545;
+    border-radius: 0.5rem;
+    padding: 0.85rem 1rem;
+    margin: 0.35rem 0 0.85rem;
+    background: rgba(220, 53, 69, 0.1);
+}
+.power-cut-banner__title {
+    color: #b02a37;
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0 0 0.35rem;
+}
+.power-cut-banner__body {
+    color: #842029;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    margin: 0;
 }
 </style>
 """,
@@ -110,11 +126,85 @@ _DASHBOARD_METRICS_KEY = "dashboard_metrics"
 _DASHBOARD_OFFLINE_FILLS_KEY = "dashboard_offline_fill_audit"
 _DASHBOARD_INVENTORY_GAP_KEY = "dashboard_inventory_gap_audit"
 _DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY = "dashboard_offline_gap_exceptions"
+_DASHBOARD_ACTIVE_EXCEPTIONS_KEY = "dashboard_active_exceptions"
+_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY = "dashboard_manifest_auto_confirm_audit"
 _USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
+
+TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 
 OFFLINE_FILL_AUDIT_SKU = "PASTA-CASE-12"
 OFFLINE_FILL_AUDIT_ACTION = "fill"
 OFFLINE_FILL_AUDIT_QUANTITY = 12
+
+
+def _is_total_power_cut_exception(exc: dict) -> bool:
+    if exc.get("status") == TOTAL_POWER_CUT_STATUS:
+        return True
+    return exc.get("kind") == "total_power_cut"
+
+
+def _power_cut_quarantine(active_exceptions: list[dict]) -> tuple[set[str], set[str]]:
+    """Container IDs and SKUs tied to total power-cut disaster recovery (Tab 3 only)."""
+    blocked_container_ids: set[str] = set()
+    blocked_skus: set[str] = set()
+    for exc in active_exceptions:
+        if not _is_total_power_cut_exception(exc):
+            continue
+        container_id = exc.get("container_id")
+        sku = exc.get("sku")
+        if container_id:
+            blocked_container_ids.add(container_id)
+        if sku:
+            blocked_skus.add(sku)
+    return blocked_container_ids, blocked_skus
+
+
+def filter_containers_for_live_tabs(
+    containers: dict,
+    active_exceptions: list[dict],
+) -> dict:
+    """Remove disaster-recovery manifests from live shop-floor views (Tabs 1 & 2)."""
+    blocked_container_ids, blocked_skus = _power_cut_quarantine(active_exceptions)
+    filtered: dict = {}
+    for container_id, container in containers.items():
+        if container_id in blocked_container_ids:
+            continue
+        skus = [
+            sku
+            for sku in container.get("skus", [])
+            if sku.get("sku") not in blocked_skus
+        ]
+        if not skus:
+            continue
+        filtered[container_id] = {**container, "skus": skus}
+    return filtered
+
+
+def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
+    """Recompute drift/task metrics from quarantined live containers only."""
+    total_drift = 0
+    total_shrink_cost = 0.0
+    pending_edge_tasks = 0
+
+    for container in containers.values():
+        container_pending = False
+        for sku in container.get("skus", []):
+            drift = int(sku.get("drift", 0))
+            total_drift += drift
+            unit_price = float(sku.get("price") or 0.0)
+            total_shrink_cost += drift * unit_price
+            if int(sku.get("variance", 0)) > 0 and not sku.get("is_resolved"):
+                container_pending = True
+        if container_pending:
+            pending_edge_tasks += 1
+
+    return {
+        **base_metrics,
+        "active_flattops": len(containers),
+        "detected_phantom_drift": total_drift,
+        "daily_shrink_cost": total_shrink_cost,
+        "pending_edge_tasks": pending_edge_tasks,
+    }
 
 
 def _is_offline_gap_exception(exc: dict) -> bool:
@@ -144,6 +234,10 @@ def _persist_dashboard_telemetry(payload: dict) -> None:
     st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fills
     st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = gap_audit
     st.session_state[_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY] = gap_exceptions
+    st.session_state[_DASHBOARD_ACTIVE_EXCEPTIONS_KEY] = payload.get("active_exceptions", [])
+    st.session_state[_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY] = payload.get(
+        "manifest_auto_confirm_audit", []
+    )
     st.session_state[_USE_CACHED_TELEMETRY_KEY] = True
 
 
@@ -208,12 +302,18 @@ try:
         offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
         inventory_gap_audit = st.session_state.get(_DASHBOARD_INVENTORY_GAP_KEY, [])
         offline_gap_exceptions = st.session_state.get(_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY, [])
+        active_exceptions = st.session_state.get(_DASHBOARD_ACTIVE_EXCEPTIONS_KEY, [])
+        manifest_auto_confirm_audit = st.session_state.get(
+            _DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY, []
+        )
     else:
         telemetry_data = fetch_telemetry()
 
         if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
             metrics = telemetry_data["metrics"]
             containers = telemetry_data.get("containers", {})
+            active_exceptions = telemetry_data.get("active_exceptions", [])
+            manifest_auto_confirm_audit = telemetry_data.get("manifest_auto_confirm_audit", [])
             offline_fill_audit, inventory_gap_audit, offline_gap_exceptions = (
                 _extract_offline_recovery_payload(telemetry_data)
             )
@@ -230,36 +330,43 @@ try:
             offline_fill_audit = []
             inventory_gap_audit = []
             offline_gap_exceptions = []
+            active_exceptions = []
+            manifest_auto_confirm_audit = []
 
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
     st.session_state[_DASHBOARD_METRICS_KEY] = metrics
     st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fill_audit
     st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = inventory_gap_audit
     st.session_state[_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY] = offline_gap_exceptions
+    st.session_state[_DASHBOARD_ACTIVE_EXCEPTIONS_KEY] = active_exceptions
+    st.session_state[_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY] = manifest_auto_confirm_audit
 except Exception as e:
     st.error(f"API Connection Error: {e}")
     st.stop()
+
+live_containers = filter_containers_for_live_tabs(containers, active_exceptions)
+live_metrics = derive_live_overview_metrics(live_containers, metrics)
 
 # ---------------------------------------------------------
 # Top Header Section: Global Metrics
 # ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric(label="Pending Delivery Cages", value=metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
+    st.metric(label="Pending Delivery Cages", value=live_metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
 with col2:
-    st.metric(label="Active Flattops", value=metrics["active_flattops"], delta="Live Manifests", delta_color="off")
+    st.metric(label="Active Flattops", value=live_metrics["active_flattops"], delta="Live Manifests", delta_color="off")
 with col3:
-    st.metric(label="Detected Phantom Drift Units", value=metrics["detected_phantom_drift"], delta="Shrink Risk", delta_color="inverse")
+    st.metric(label="Detected Phantom Drift Units", value=live_metrics["detected_phantom_drift"], delta="Shrink Risk", delta_color="inverse")
 with col4:
-    st.metric(label="Daily Shrink Cost", value=f"£{metrics['daily_shrink_cost']:,.2f}", delta="Revenue Lost", delta_color="inverse")
+    st.metric(label="Daily Shrink Cost", value=f"£{live_metrics['daily_shrink_cost']:,.2f}", delta="Revenue Lost", delta_color="inverse")
 with col5:
-    if metrics["pending_edge_tasks"] > 0:
-        st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="Action Required", delta_color="inverse")
+    if live_metrics["pending_edge_tasks"] > 0:
+        st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="Action Required", delta_color="inverse")
     else:
-        st.metric(label="Pending Edge Tasks", value=metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
+        st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
 
 telemetry_rows = []
-for container_id, container in containers.items():
+for container_id, container in live_containers.items():
     zone = container.get("zone", "")
     for sku in container.get("skus", []):
         drift_units = sku.get("drift", 0)
@@ -298,6 +405,8 @@ def _execution_status_pill_class(status: str) -> str:
     if status == "Verified":
         return "exec-pill-status-verified"
     if status == "Gap Scan Recommended":
+        return "exec-pill-status-gap"
+    if status == TOTAL_POWER_CUT_STATUS:
         return "exec-pill-status-gap"
     return "exec-pill-status-pending"
 
@@ -455,6 +564,84 @@ def render_offline_review_card_grid(cards: list[dict], *, columns: int = 3) -> N
             render_offline_review_card(card)
 
 
+def _build_power_cut_cards(
+    power_cut_exceptions: list[dict],
+    manifest_auto_confirm_audit: list[dict],
+) -> list[dict]:
+    audit_by_sku = {
+        row.get("sku"): row for row in manifest_auto_confirm_audit if row.get("sku")
+    }
+    cards: list[dict] = []
+    for exc in power_cut_exceptions:
+        sku = exc.get("sku", "")
+        if not sku:
+            continue
+        audit = audit_by_sku.get(sku, {})
+        expected_units = int(audit.get("expected_units") or exc.get("units") or 0)
+        confirmed_units = int(audit.get("confirmed_units") or exc.get("units") or 0)
+        cards.append(
+            {
+                "title": f"Disaster Recovery: {sku}",
+                "sku": sku,
+                "name": audit.get("name") or sku,
+                "ean": exc.get("ean", ""),
+                "expected_units": expected_units,
+                "reconciled_units": confirmed_units,
+                "unlogged_backstock": expected_units,
+                "variance_delta": 0,
+                "action_status": "Emergency Auto-Confirm / Total Power Cut",
+                "timestamp": audit.get("timestamp", ""),
+                "detail": exc.get("message", ""),
+                "manifest_id": exc.get("container_id", ""),
+            }
+        )
+    return cards
+
+
+def render_power_cut_recovery_card(card: dict) -> None:
+    """Disaster recovery card — mirrors offline review card layout."""
+    product_name = card.get("name") or card["sku"]
+
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.subheader(card["title"])
+        subtitle_parts = []
+        if card.get("manifest_id"):
+            subtitle_parts.append(f"Manifest: {card['manifest_id']}")
+        if card.get("timestamp"):
+            subtitle_parts.append(f"Auto-confirmed: {card['timestamp']}")
+        if subtitle_parts:
+            st.caption(" | ".join(subtitle_parts))
+
+        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_status_pill(
+            TOTAL_POWER_CUT_STATUS,
+            TOTAL_POWER_CUT_STATUS,
+        )
+
+        metrics_left, metrics_right = st.columns(2)
+        with metrics_left:
+            st.metric("Expected Units", card["expected_units"])
+            st.metric("Unlogged Backstock", card["unlogged_backstock"])
+        with metrics_right:
+            st.metric("Auto-Confirmed Units", card["reconciled_units"])
+            st.metric("Variance Delta", card["variance_delta"])
+
+        st.markdown("---")
+        st.caption(f"**Action Status:** {card.get('action_status', '—')}")
+        st.error("🚨 **Emergency Auto-Confirm: Mandatory Gap Scan Required**")
+        if card.get("detail"):
+            st.caption(card["detail"])
+
+
+def render_power_cut_recovery_card_grid(cards: list[dict], *, columns: int = 3) -> None:
+    if not cards:
+        return
+    grid = st.columns(columns)
+    for index, card in enumerate(cards):
+        with grid[index % columns]:
+            render_power_cut_recovery_card(card)
+
+
 tab1, tab2, tab3 = st.tabs(["System Overview", "Telemetry & Exceptions", "Offline Fill"])
 
 with tab1:
@@ -472,8 +659,30 @@ with tab2:
     st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
 with tab3:
+    power_cut_exceptions = [
+        exc for exc in active_exceptions if _is_total_power_cut_exception(exc)
+    ]
+    if power_cut_exceptions:
+        st.markdown(
+            """
+<div class="power-cut-banner">
+  <p class="power-cut-banner__title">CRITICAL: Total Power Cut Detected</p>
+  <p class="power-cut-banner__body">
+    Delivery manifest was auto-confirmed without physical verification during a catastrophic power loss.
+    A mandatory full store true-up gap scan is required before normal operations resume.
+  </p>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+        power_cut_cards = _build_power_cut_cards(
+            power_cut_exceptions, manifest_auto_confirm_audit
+        )
+        render_power_cut_recovery_card_grid(power_cut_cards, columns=3)
+        st.divider()
+
     st.caption(
-        "Post-blackout recovery review — offline fills and gap exceptions only. "
+        "Post-blackout recovery review — offline fills, disaster recovery, and gap exceptions. "
         "Live telemetry stays on **Telemetry & Exceptions**."
     )
 
@@ -500,10 +709,11 @@ with tab3:
     full_sync_cards = _build_offline_full_sync_cards(audit_rows)
     gap_cards = _build_offline_gap_cards(inventory_gap_audit, gap_exception_by_sku)
 
-    if not full_sync_cards and not gap_cards:
+    if not full_sync_cards and not gap_cards and not power_cut_exceptions:
         st.markdown("#### Awaiting offline fill data")
         st.caption(
-            "Run `python3 ft-03.py` to populate offline audit and exception cards."
+            "Run `python3 ft-03.py` for offline fill audit cards, or `python3 ft-04.py` "
+            "for total power cut disaster recovery."
         )
     else:
         summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
@@ -738,7 +948,7 @@ def render_execution_telemetry_card(task: dict) -> None:
                 render_operational_control_deck(container_data, sku_data)
 
 
-tasks = build_tasks(containers)
+tasks = build_tasks(live_containers)
 
 # Create a 3-column grid for a more compact dashboard layout
 grid_cols = st.columns(3)
