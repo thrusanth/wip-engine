@@ -1,5 +1,8 @@
 import html
+import json
 import os
+import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -94,6 +97,21 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
     line-height: 1.45;
     margin: 0;
 }
+.edge-metric-label {
+    font-size: 0.875rem;
+    color: rgba(49, 51, 63, 0.62);
+    margin: 0 0 0.35rem 0;
+    line-height: 1.2;
+}
+.edge-network-state {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #d97706;
+    margin: 0;
+    line-height: 1.35;
+    word-break: break-word;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -135,6 +153,12 @@ TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 OFFLINE_FILL_AUDIT_SKU = "PASTA-CASE-12"
 OFFLINE_FILL_AUDIT_ACTION = "fill"
 OFFLINE_FILL_AUDIT_QUANTITY = 12
+
+EDGE_CAMERA_NETWORK_STATE = "[STATE: DISCONNECTED_AUTONOMY]"
+# Must match artifact paths written by ft-05.py (repo root, not env overrides).
+_REPO_ROOT = Path(__file__).resolve().parent
+EDGE_AI_WEIGHTS_PATH = _REPO_ROOT / "local_sku_weights_ft05.json"
+EDGE_AI_BUFFER_PATH = _REPO_ROOT / "offline_detection_buffer_ft05.db"
 
 
 def _is_total_power_cut_exception(exc: dict) -> bool:
@@ -434,6 +458,7 @@ def _build_offline_full_sync_cards(audit_rows: list[dict]) -> list[dict]:
             grouped[key] = {
                 "sku": sku,
                 "name": row.get("name") or sku,
+                "ean": (row.get("ean") or "").strip(),
                 "action": action,
                 "reconciled_units": 0,
                 "sync_status": row.get("sync_status", "Synced / Offline Fill"),
@@ -454,7 +479,7 @@ def _build_offline_full_sync_cards(audit_rows: list[dict]) -> list[dict]:
                 "title": f"Offline Fill Review: {sku}",
                 "sku": sku,
                 "name": entry["name"],
-                "ean": "",
+                "ean": entry.get("ean", ""),
                 "status": "Verified" if reconciled >= expected else "Pending Verification",
                 "expected_units": expected,
                 "reconciled_units": reconciled,
@@ -642,7 +667,86 @@ def render_power_cut_recovery_card_grid(cards: list[dict], *, columns: int = 3) 
             render_power_cut_recovery_card(card)
 
 
-tab1, tab2, tab3 = st.tabs(["System Overview", "Telemetry & Exceptions", "Offline Fill"])
+def _truncate_feature_hash(feature_hash: str, preview_len: int = 12) -> str:
+    if len(feature_hash) <= preview_len:
+        return feature_hash
+    return f"{feature_hash[:preview_len]}..."
+
+
+def _load_edge_visual_signature_rows(weights_path: str | Path) -> list[dict]:
+    """Load itemized visual signature rows from the localized edge JSON cache."""
+    try:
+        with open(weights_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    by_hash = payload.get("by_feature_hash", {})
+    if not isinstance(by_hash, dict):
+        return []
+
+    rows: list[dict] = []
+    for entry in by_hash.values():
+        if not isinstance(entry, dict):
+            continue
+        sku_id = str(entry.get("sku_id", ""))
+        ean = str(entry.get("ean", "")).strip()
+        feature_hash = str(entry.get("feature_hash", ""))
+        rows.append(
+            {
+                "sku_id": sku_id,
+                "ean": ean,
+                "feature_hash": _truncate_feature_hash(feature_hash),
+            }
+        )
+    return sorted(rows, key=lambda row: row.get("sku_id", ""))
+
+
+def _count_cached_visual_signatures(weights_path: str | Path) -> int:
+    return len(_load_edge_visual_signature_rows(weights_path))
+
+
+def _load_offline_detection_log_rows(db_path: str | Path) -> list[dict]:
+    """Load append-only offline detection rows from the WAL buffer database."""
+    db_path = str(db_path)
+    if not os.path.isfile(db_path):
+        return []
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.execute(
+                """
+                SELECT timestamp, sku_id, detected_quantity, status
+                FROM offline_detection_log
+                ORDER BY id ASC;
+                """
+            )
+            return [
+                {
+                    "timestamp": row[0],
+                    "sku_id": row[1],
+                    "detected_quantity": row[2],
+                    "status": row[3],
+                }
+                for row in cursor.fetchall()
+            ]
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+    except OSError:
+        return []
+
+
+def _count_pending_offline_scans(db_path: str | Path) -> int:
+    return len(_load_offline_detection_log_rows(db_path))
+
+
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["System Overview", "Telemetry & Exceptions", "Offline Fill", "Edge AI Autonomy"]
+)
 
 with tab1:
     st.markdown(
@@ -756,6 +860,64 @@ with tab3:
                     use_container_width=True,
                     hide_index=True,
                 )
+
+with tab4:
+    st.subheader("Localized Edge Autonomy (Computer Vision)")
+    edge_col1, edge_col2, edge_col3 = st.columns(3)
+    cached_signatures = _count_cached_visual_signatures(EDGE_AI_WEIGHTS_PATH)
+    pending_offline_scans = _count_pending_offline_scans(EDGE_AI_BUFFER_PATH)
+    with edge_col1:
+        st.markdown(
+            f'<p class="edge-metric-label">Camera Network State</p>'
+            f'<p class="edge-network-state">{html.escape(EDGE_CAMERA_NETWORK_STATE)}</p>',
+            unsafe_allow_html=True,
+        )
+    with edge_col2:
+        st.metric("Cached Visual Signatures", cached_signatures)
+    with edge_col3:
+        st.metric("Pending Offline Scans", pending_offline_scans)
+
+    st.divider()
+    signature_rows = _load_edge_visual_signature_rows(EDGE_AI_WEIGHTS_PATH)
+    st.markdown("#### Cached Visual Signatures")
+    st.caption(f"Source: `{EDGE_AI_WEIGHTS_PATH.name}`")
+    if not signature_rows:
+        st.info("No edge signatures cached yet. Run `python3 ft-05.py` to teach the local visual cache.")
+    else:
+        if all(not (row.get("ean") or "").strip() for row in signature_rows):
+            st.warning(
+                "Cached signatures found but EAN is missing — re-run `python3 ft-05.py` "
+                "to refresh the local visual cache."
+            )
+        st.dataframe(
+            pd.DataFrame(signature_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "sku_id": st.column_config.TextColumn("SKU ID"),
+                "ean": st.column_config.TextColumn("EAN (13-digit barcode)"),
+                "feature_hash": st.column_config.TextColumn("Feature Hash"),
+            },
+        )
+
+    st.divider()
+    offline_log_rows = _load_offline_detection_log_rows(EDGE_AI_BUFFER_PATH)
+    st.markdown("#### Pending Offline Scans")
+    st.caption(f"Source: `{EDGE_AI_BUFFER_PATH.name}`")
+    if not offline_log_rows:
+        st.info("WAL buffer queue is empty.")
+    else:
+        st.dataframe(
+            pd.DataFrame(offline_log_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "timestamp": st.column_config.TextColumn("Timestamp"),
+                "sku_id": st.column_config.TextColumn("SKU ID"),
+                "detected_quantity": st.column_config.NumberColumn("Detected Qty"),
+                "status": st.column_config.TextColumn("Status"),
+            },
+        )
 
 st.divider()
 

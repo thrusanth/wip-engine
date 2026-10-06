@@ -20,7 +20,7 @@
       "name": "Mixed Delivery Cage Manifest"
     },
     "PASTA-CASE-12": {
-      "ean": "5012345678999",
+      "ean": "5012345678912",
       "name": "Pasta Case",
       "price": 2.4
     },
@@ -38,6 +38,11 @@
       "ean": "5012345678965",
       "name": "Family Cereal Case",
       "price": 2.9
+    },
+    "ENERGY-DRINK-12PK": {
+      "ean": "5012345678908",
+      "name": "Energy Drink 12pk",
+      "price": 3.5
     }
   }
 }

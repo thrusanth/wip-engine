@@ -123,6 +123,7 @@ class OfflineFillAuditEntry(BaseModel):
     event_id: str
     sku: str
     name: str = ""
+    ean: str = ""
     quantity: int = Field(default=1, ge=1)
     action: str
     timestamp: str

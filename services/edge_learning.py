@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from models.schemas import SKUVisualSignature
+from services.sku_catalog import get_sku_profile
 
 DEFAULT_WEIGHTS_PATH = os.getenv("LOCAL_SKU_WEIGHTS_PATH", "local_sku_weights.json")
 DEFAULT_CONFIDENCE_THRESHOLD = 0.85
@@ -78,12 +79,17 @@ class EdgeInferenceEngine:
         Simulate an online cloud model ping: hash the frame and store the signature locally.
 
         The resulting ``feature_hash`` becomes the dictionary key used later during
-        disconnected autonomy inference.
+        disconnected autonomy inference. ``ean`` is persisted in the JSON cache entry;
+        when omitted, it is resolved from the product catalog when available.
         """
+        resolved_ean = (ean or "").strip()
+        if not resolved_ean:
+            resolved_ean = get_sku_profile(sku_id).get("ean", "")
+
         feature_hash = compute_visual_feature_hash(mock_image_data)
         signature = SKUVisualSignature(
             sku_id=sku_id,
-            ean=ean,
+            ean=resolved_ean,
             feature_hash=feature_hash,
             confidence_threshold=confidence_threshold,
         )

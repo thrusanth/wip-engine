@@ -445,6 +445,7 @@ class WipEngine:
                     event_id=event.event_id,
                     sku=event.sku,
                     name=profile.get("name", event.sku),
+                    ean=profile.get("ean", ""),
                     quantity=1,
                     action=event.action,
                     timestamp=event.timestamp,

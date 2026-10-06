@@ -23,6 +23,7 @@ import requests
 
 from edge_database import DB_PATH, ensure_edge_buffer
 from edge_recovery import BACKEND_URL, flush_pending_events
+from services.sku_catalog import get_sku_profile
 
 BACKEND_ORIGIN = os.getenv("FT03_BACKEND_ORIGIN", "http://localhost:8000")
 TELEMETRY_URL = f"{BACKEND_ORIGIN.rstrip('/')}/api/v1/telemetry"
@@ -30,6 +31,7 @@ GAP_REPORT_URL = f"{TELEMETRY_URL}/offline-partial-fill"
 
 # --- Scenario 1: Pasta offline recovery ---
 PASTA_SKU = "PASTA-CASE-12"
+PASTA_EAN = "5012345678912"
 PASTA_NAME = "Pasta Case"
 PASTA_QTY = 12
 FILL_ACTION = "fill"
@@ -150,9 +152,23 @@ def fetch_telemetry() -> dict:
     return response.json()
 
 
+def assert_pasta_catalog_profile() -> None:
+    profile = get_sku_profile(PASTA_SKU)
+    catalog_ean = profile.get("ean", "")
+    if catalog_ean != PASTA_EAN:
+        raise AssertionError(
+            f"{PASTA_SKU} catalog EAN expected {PASTA_EAN!r}, got {catalog_ean!r}"
+        )
+
+
 def scenario_01_offline_edge_recovery() -> None:
     _heading("SCENARIO 1 — Offline Edge Recovery (PASTA-CASE-12)")
     print(f"Central ledger URL: {BACKEND_URL}")
+    assert_pasta_catalog_profile()
+    print(
+        f"PASTA profile: sku={PASTA_SKU!r} ean={PASTA_EAN!r} name={PASTA_NAME!r} "
+        f"qty={PASTA_QTY}"
+    )
 
     reset_edge_buffer()
     event_ids = seed_pending_fills(
@@ -177,6 +193,11 @@ def scenario_01_offline_edge_recovery() -> None:
     if len(pasta_rows) < PASTA_QTY:
         raise AssertionError(
             f"Central ledger expected >={PASTA_QTY} pasta audit rows, found {len(pasta_rows)}"
+        )
+    sample = pasta_rows[0]
+    if sample.get("ean") != PASTA_EAN:
+        raise AssertionError(
+            f"Offline fill audit EAN expected {PASTA_EAN!r}, got {sample.get('ean')!r}"
         )
 
     _pass(

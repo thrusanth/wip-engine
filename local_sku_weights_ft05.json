@@ -2,7 +2,7 @@
   "by_feature_hash": {
     "45a132d1cbd56c49c403377ea58aee8bfcc517f556327889dad5a24ac7df4709": {
       "confidence_threshold": 0.85,
-      "ean": "",
+      "ean": "5012345678908",
       "feature_hash": "45a132d1cbd56c49c403377ea58aee8bfcc517f556327889dad5a24ac7df4709",
       "sku_id": "ENERGY-DRINK-12PK"
     }
