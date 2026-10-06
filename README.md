@@ -42,7 +42,7 @@ Clone the repository and spin up the containers in detached mode:
 docker compose up --build -d
 ```
 
-### 2. Access the Application
+### 3. Access the Application
 
 Once the containers are built and running, you can access the services in your browser:
 
