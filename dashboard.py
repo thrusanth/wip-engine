@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
 API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
@@ -124,6 +125,189 @@ st.markdown("Enterprise Dashboard for Real-Time Execution Tracking & Anomaly Det
 # ---------------------------------------------------------
 # API Integration
 # ---------------------------------------------------------
+def fetch_bouncer_health():
+    try:
+        response = requests.get(f"{API_BASE_URL}/bouncer/health", timeout=3)
+        if response.status_code == 200:
+            return response.json()
+    except requests.exceptions.RequestException:
+        pass
+    return None
+
+
+def fetch_bouncer_rejections():
+    try:
+        response = requests.get(f"{API_BASE_URL}/bouncer/rejections", timeout=3)
+        if response.status_code == 200:
+            return response.json()
+    except requests.exceptions.RequestException:
+        pass
+    return []
+
+
+def fetch_bouncer_reconciliations():
+    try:
+        response = requests.get(f"{API_BASE_URL}/bouncer/reconciliations", timeout=3)
+        if response.status_code == 200:
+            return response.json()
+    except requests.exceptions.RequestException:
+        pass
+    return []
+
+
+def _bouncer_row_payload(row: dict) -> dict:
+    nested = row.get("payload")
+    if isinstance(nested, dict):
+        return nested
+    return row
+
+
+def _bouncer_reconciliation_row_html(row: dict) -> str:
+    """Single table row — ported from api_bouncer/main.py get_dashboard()."""
+    payload = _bouncer_row_payload(row)
+    trace_id = html.escape(str(row.get("trace_id") or payload.get("trace_id") or ""))
+    sku = html.escape(str(row.get("sku") or payload.get("sku") or ""))
+    ean = html.escape(str(row.get("ean") or payload.get("ean") or ""))
+    status = str(row.get("status") or payload.get("status") or "")
+    format_alert = html.escape(str(row.get("format_alert") or payload.get("format_alert") or ""))
+    shop_floor_action = html.escape(
+        str(row.get("shop_floor_action") or payload.get("shop_floor_action") or "")
+    )
+
+    tx_hook = payload.get("transaction_engine_hook")
+    tx_data = "<span class='bouncer-empty-state'>No ledger action required (Synced)</span>"
+    if isinstance(tx_hook, dict) and tx_hook:
+        tx_data = (
+            f"<div class='bouncer-tx-data'><strong>TxType:</strong> "
+            f"{html.escape(str(tx_hook.get('transaction_type', '')))}<br>"
+            f"<strong>Adj:</strong> {html.escape(str(tx_hook.get('ledger_adjustments', '')))}"
+        )
+        unit_price = tx_hook.get("calculated_unit_price")
+        if unit_price is not None:
+            try:
+                price_display = html.escape(f"£{float(unit_price):.2f}")
+            except (TypeError, ValueError):
+                price_display = html.escape(str(unit_price))
+            rule = html.escape(str(tx_hook.get("compliance_rule_applied") or ""))
+            tx_data += (
+                f"<br><strong>Unit Price:</strong> {price_display}"
+                f"<br><strong>Rule & Math:</strong> {rule}"
+            )
+        tx_data += "</div>"
+
+    label_data = ""
+    label_task = payload.get("label_print_task")
+    if isinstance(label_task, dict) and label_task:
+        encoded_sku = html.escape(str(label_task.get("encoded_sku", "")))
+        instruction = html.escape(str(label_task.get("price_override_instruction", "")))
+        label_data = (
+            f"<div class='bouncer-label-data'>🖨️ <strong>PDA Print Task:</strong> "
+            f"{encoded_sku} ({instruction})</div>"
+        )
+
+    status_class = "violation" if "VIOLATION" in status else "synced"
+    status_icon = "⚠️" if "VIOLATION" in status else "✅"
+    status_esc = html.escape(status)
+
+    return (
+        "<tr>"
+        "<td>"
+        f'<span class="bouncer-trace-id">{trace_id}</span><br>'
+        f'<span class="bouncer-sku-label">{sku}</span><br>'
+        f'<span class="bouncer-ean-pill">EAN {ean}</span>'
+        "</td>"
+        f'<td><span class="bouncer-badge {status_class}">{status_icon} {status_esc}</span></td>'
+        f'<td><span class="bouncer-alert-text">{format_alert}</span></td>'
+        f'<td><span class="bouncer-action-text">{shop_floor_action}</span></td>'
+        f"<td>{tx_data}{label_data}</td>"
+        "</tr>"
+    )
+
+
+def build_bouncer_reconciliation_html(reconciliations: list[dict]) -> str:
+    """One cohesive HTML document (style + thead + tbody) for iframe embedding."""
+    rows_html = "".join(_bouncer_reconciliation_row_html(row) for row in reconciliations)
+    return (
+        "<!DOCTYPE html>"
+        '<html lang="en">'
+        "<head>"
+        '<meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        "<title>Live Reconciliation Dashboard</title>"
+        "<style>"
+        ":root {"
+        " --bouncer-bg: #0e1117; --bouncer-surface: #0e1117; --bouncer-text: #fafafa;"
+        " --bouncer-text-muted: #e0e0e0; --bouncer-border: rgba(255, 255, 255, 0.1);"
+        " --bouncer-brand: #fafafa; }"
+        "html, body { margin: 0; padding: 0; background: transparent;"
+        " font-family: system-ui, -apple-system, sans-serif; color: var(--bouncer-text); line-height: 1.5; }"
+        ".bouncer-recon-root { padding: 8px 4px 16px; max-width: 100%; box-sizing: border-box;"
+        " background: var(--bouncer-bg); }"
+        ".bouncer-recon-title { color: var(--bouncer-brand); margin: 0 0 16px; font-size: 1.25rem;"
+        " letter-spacing: -0.02em; font-weight: 600; }"
+        ".bouncer-table-wrapper { background: var(--bouncer-surface); border-radius: 10px;"
+        " box-shadow: none; overflow-x: auto; border: 1px solid var(--bouncer-border); }"
+        "table { width: 100%; border-collapse: collapse; min-width: 900px; background: var(--bouncer-surface); }"
+        "th, td { padding: 16px 20px; text-align: left; border-bottom: 1px solid #333333;"
+        " vertical-align: middle; color: var(--bouncer-text-muted); }"
+        "th { background: #0e1117; font-weight: 600; color: #fafafa; text-transform: uppercase;"
+        " font-size: 0.75rem; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }"
+        "td { background: #0e1117; }"
+        ".bouncer-sku-label { font-weight: 700; color: #fafafa; }"
+        ".bouncer-trace-id { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"
+        " font-size: 0.7rem; color: #a3a8b8; letter-spacing: 0.05em; }"
+        ".bouncer-ean-pill { display: inline-block; margin-top: 6px; padding: 0.2rem 0.6rem;"
+        " border-radius: 999px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"
+        " font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; color: #34d399;"
+        " background: rgba(16, 185, 129, 0.18); border: 1px solid rgba(52, 211, 153, 0.65); }"
+        ".bouncer-badge { padding: 6px 12px; border-radius: 6px; font-weight: 600; font-size: 0.75rem;"
+        " display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;"
+        " font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: -0.02em; }"
+        ".bouncer-badge.violation { background: rgba(185, 28, 28, 0.22); color: #fecaca; border: 1px solid #f87171;"
+        " box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.35), 0 1px 3px rgba(0, 0, 0, 0.45); }"
+        ".bouncer-badge.synced { background: rgba(21, 128, 61, 0.28); color: #bbf7d0; border: 1px solid #4ade80;"
+        " box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }"
+        ".bouncer-alert-text { font-weight: 500; color: #fafafa; font-size: 0.95rem; line-height: 1.4; display: block; }"
+        ".bouncer-action-text { color: #e0e0e0; font-size: 0.9rem; }"
+        ".bouncer-tx-data { background: #3d2a14; border-left: 3px solid #d97706; padding: 8px 12px;"
+        " font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem;"
+        " color: #fde68a; border-radius: 0 6px 6px 0; line-height: 1.4; margin-bottom: 4px; }"
+        ".bouncer-tx-data strong { color: #fef3c7; }"
+        ".bouncer-label-data { background: #1e293b; border-left: 3px solid #64748b; padding: 6px 12px;"
+        " font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem;"
+        " color: #e2e8f0; border-radius: 0 6px 6px 0; }"
+        ".bouncer-label-data strong { color: #f1f5f9; }"
+        ".bouncer-empty-state { color: #9ca3af; font-style: italic; font-size: 0.85rem; padding: 4px; }"
+        "</style>"
+        "</head>"
+        "<body>"
+        '<div class="bouncer-recon-root">'
+        '<h2 class="bouncer-recon-title">Live Reconciliation Dashboard</h2>'
+        '<div class="bouncer-table-wrapper">'
+        "<table>"
+        "<thead><tr>"
+        "<th>Audit Trace / Product &amp; EAN</th>"
+        "<th>Intercept Status</th>"
+        "<th>Format Alert</th>"
+        "<th>Shop-Floor Action</th>"
+        "<th>Transaction &amp; Label Payload</th>"
+        "</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        "</table>"
+        "</div>"
+        "</div>"
+        "</body>"
+        "</html>"
+    )
+
+
+def render_bouncer_reconciliation_dashboard(reconciliations: list[dict]) -> None:
+    """Embed api_bouncer-style reconciliation UI (Streamlit strips table tags from markdown)."""
+    html_content = build_bouncer_reconciliation_html(reconciliations)
+    frame_height = min(1200, 200 + len(reconciliations) * 100)
+    components.html(html_content, height=frame_height, scrolling=True)
+
+
 def fetch_telemetry():
     """Fetches the latest state from the FastAPI backend."""
     try:
@@ -147,6 +331,22 @@ _DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY = "dashboard_offline_gap_exceptions"
 _DASHBOARD_ACTIVE_EXCEPTIONS_KEY = "dashboard_active_exceptions"
 _DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY = "dashboard_manifest_auto_confirm_audit"
 _USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
+_DASHBOARD_ACTIVE_TAB_KEY = "dashboard_active_tab"
+_EDGE_AI_TAB_LOADED_KEY = "dashboard_edge_ai_sqlite_loaded"
+_BOUNCER_TAB_LOADED_KEY = "dashboard_bouncer_api_loaded"
+
+TAB_SYSTEM_OVERVIEW = "System Overview"
+TAB_TELEMETRY = "Telemetry & Exceptions"
+TAB_OFFLINE_FILL = "Offline Fill"
+TAB_EDGE_AI = "Edge AI Autonomy"
+TAB_API_BOUNCER = "API Bouncer"
+DASHBOARD_TABS = [
+    TAB_SYSTEM_OVERVIEW,
+    TAB_TELEMETRY,
+    TAB_OFFLINE_FILL,
+    TAB_EDGE_AI,
+    TAB_API_BOUNCER,
+]
 
 TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 
@@ -673,6 +873,7 @@ def _truncate_feature_hash(feature_hash: str, preview_len: int = 12) -> str:
     return f"{feature_hash[:preview_len]}..."
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def _load_edge_visual_signature_rows(weights_path: str | Path) -> list[dict]:
     """Load itemized visual signature rows from the localized edge JSON cache."""
     path = Path(weights_path)
@@ -709,6 +910,7 @@ def _count_cached_visual_signatures(weights_path: str | Path) -> int:
     return len(_load_edge_visual_signature_rows(weights_path))
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def _load_offline_detection_log_rows(db_path: str | Path) -> list[dict]:
     """Load append-only offline detection rows from the WAL buffer database."""
     db_path = str(Path(db_path))
@@ -745,17 +947,20 @@ def _count_pending_offline_scans(db_path: str | Path) -> int:
     return len(_load_offline_detection_log_rows(db_path))
 
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["System Overview", "Telemetry & Exceptions", "Offline Fill", "Edge AI Autonomy"]
-)
+if _DASHBOARD_ACTIVE_TAB_KEY not in st.session_state:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(DASHBOARD_TABS)
 
 with tab1:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
     st.markdown(
         "High-level operational charts and trend summaries will appear here. "
         "Use the flattop execution cards below for live reconciliation workflows."
     )
 
 with tab2:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_TELEMETRY
     st.subheader("Live Execution Telemetry")
     telemetry_df = pd.DataFrame(telemetry_rows)
     telemetry_df = telemetry_df[telemetry_df["Drift"] != 0].sort_values(
@@ -764,6 +969,7 @@ with tab2:
     st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
 with tab3:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_OFFLINE_FILL
     power_cut_exceptions = [
         exc for exc in active_exceptions if _is_total_power_cut_exception(exc)
     ]
@@ -863,77 +1069,160 @@ with tab3:
                 )
 
 with tab4:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_EDGE_AI
     st.subheader("Localized Edge Autonomy (Computer Vision)")
     edge_col1, edge_col2, edge_col3 = st.columns(3)
-    weights_file_exists = EDGE_AI_WEIGHTS_PATH.is_file()
-    buffer_file_exists = EDGE_AI_BUFFER_PATH.is_file()
-    cached_signatures = _count_cached_visual_signatures(EDGE_AI_WEIGHTS_PATH)
-    pending_offline_scans = _count_pending_offline_scans(EDGE_AI_BUFFER_PATH)
     with edge_col1:
         st.markdown(
             f'<p class="edge-metric-label">Camera Network State</p>'
             f'<p class="edge-network-state">{html.escape(EDGE_CAMERA_NETWORK_STATE)}</p>',
             unsafe_allow_html=True,
         )
-    with edge_col2:
-        st.metric("Cached Visual Signatures", cached_signatures)
-    with edge_col3:
-        st.metric("Pending Offline Scans", pending_offline_scans)
 
-    st.divider()
-    signature_rows = _load_edge_visual_signature_rows(EDGE_AI_WEIGHTS_PATH)
-    st.markdown("#### Cached Visual Signatures")
-    st.caption(f"Source: `{EDGE_AI_WEIGHTS_PATH.name}`")
-    if not signature_rows:
-        if not weights_file_exists:
-            st.info(
-                "No edge signatures cached yet — `local_sku_weights_ft05.json` was not found. "
-                "Run `python3 ft-05.py` to teach the local visual cache."
-            )
+    if st.button("Load edge SQLite buffers", key="load_edge_ai_sqlite"):
+        st.session_state[_EDGE_AI_TAB_LOADED_KEY] = True
+        _load_edge_visual_signature_rows.clear()
+        _load_offline_detection_log_rows.clear()
+        st.rerun()
+
+    if st.session_state.get(_EDGE_AI_TAB_LOADED_KEY, False):
+        weights_file_exists = EDGE_AI_WEIGHTS_PATH.is_file()
+        buffer_file_exists = EDGE_AI_BUFFER_PATH.is_file()
+        cached_signatures = _count_cached_visual_signatures(EDGE_AI_WEIGHTS_PATH)
+        pending_offline_scans = _count_pending_offline_scans(EDGE_AI_BUFFER_PATH)
+        with edge_col2:
+            st.metric("Cached Visual Signatures", cached_signatures)
+        with edge_col3:
+            st.metric("Pending Offline Scans", pending_offline_scans)
+
+        st.divider()
+        signature_rows = _load_edge_visual_signature_rows(str(EDGE_AI_WEIGHTS_PATH))
+        st.markdown("#### Cached Visual Signatures")
+        st.caption(f"Source: `{EDGE_AI_WEIGHTS_PATH.name}`")
+        if not signature_rows:
+            if not weights_file_exists:
+                st.info(
+                    "No edge signatures cached yet — `local_sku_weights_ft05.json` was not found. "
+                    "Run `python3 ft-05.py` to teach the local visual cache."
+                )
+            else:
+                st.info(
+                    "No edge signatures cached yet. Run `python3 ft-05.py` to teach the local visual cache."
+                )
         else:
-            st.info(
-                "No edge signatures cached yet. Run `python3 ft-05.py` to teach the local visual cache."
+            if all(not (row.get("ean") or "").strip() for row in signature_rows):
+                st.warning(
+                    "Cached signatures found but EAN is missing — re-run `python3 ft-05.py` "
+                    "to refresh the local visual cache."
+                )
+            st.dataframe(
+                pd.DataFrame(signature_rows),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "sku_id": st.column_config.TextColumn("SKU ID"),
+                    "ean": st.column_config.TextColumn("EAN (13-digit barcode)"),
+                    "feature_hash": st.column_config.TextColumn("Feature Hash"),
+                },
+            )
+
+        st.divider()
+        offline_log_rows = _load_offline_detection_log_rows(str(EDGE_AI_BUFFER_PATH))
+        st.markdown("#### Pending Offline Scans")
+        st.caption(f"Source: `{EDGE_AI_BUFFER_PATH.name}`")
+        if not offline_log_rows:
+            if not buffer_file_exists:
+                st.info(
+                    "WAL buffer queue is empty — `offline_detection_buffer_ft05.db` was not found. "
+                    "Run `python3 ft-05.py` to append an offline detection row."
+                )
+            else:
+                st.info("WAL buffer queue is empty.")
+        else:
+            st.dataframe(
+                pd.DataFrame(offline_log_rows),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "timestamp": st.column_config.TextColumn("Timestamp"),
+                    "sku_id": st.column_config.TextColumn("SKU ID"),
+                    "detected_quantity": st.column_config.NumberColumn("Detected Qty"),
+                    "status": st.column_config.TextColumn("Status"),
+                },
             )
     else:
-        if all(not (row.get("ean") or "").strip() for row in signature_rows):
-            st.warning(
-                "Cached signatures found but EAN is missing — re-run `python3 ft-05.py` "
-                "to refresh the local visual cache."
-            )
-        st.dataframe(
-            pd.DataFrame(signature_rows),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "sku_id": st.column_config.TextColumn("SKU ID"),
-                "ean": st.column_config.TextColumn("EAN (13-digit barcode)"),
-                "feature_hash": st.column_config.TextColumn("Feature Hash"),
-            },
+        with edge_col2:
+            st.metric("Cached Visual Signatures", "—")
+        with edge_col3:
+            st.metric("Pending Offline Scans", "—")
+        st.caption(
+            "SQLite WAL reads are deferred until you load this tab's buffers "
+            "(keeps other tabs responsive)."
         )
 
-    st.divider()
-    offline_log_rows = _load_offline_detection_log_rows(EDGE_AI_BUFFER_PATH)
-    st.markdown("#### Pending Offline Scans")
-    st.caption(f"Source: `{EDGE_AI_BUFFER_PATH.name}`")
-    if not offline_log_rows:
-        if not buffer_file_exists:
-            st.info(
-                "WAL buffer queue is empty — `offline_detection_buffer_ft05.db` was not found. "
-                "Run `python3 ft-05.py` to append an offline detection row."
+with tab5:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_API_BOUNCER
+    st.subheader("API Bouncer — Network Health & Ingress Controls")
+
+    if st.button("Refresh bouncer telemetry", key="load_bouncer_tab"):
+        st.session_state[_BOUNCER_TAB_LOADED_KEY] = True
+        st.rerun()
+
+    if st.session_state.get(_BOUNCER_TAB_LOADED_KEY, False):
+        health = fetch_bouncer_health()
+        rejections = fetch_bouncer_rejections()
+        reconciliations = fetch_bouncer_reconciliations()
+
+        if health:
+            h1, h2, h3, h4 = st.columns(4)
+            with h1:
+                st.metric("Middleware Status", health.get("status", "unknown").upper())
+            with h2:
+                st.metric("Rejections (1h)", health.get("rejections_last_hour", 0))
+            with h3:
+                st.metric("Reconciliations", health.get("reconciliations_total", 0))
+            with h4:
+                st.metric("CV Rate Limit / min", health.get("rate_limit_per_minute", "—"))
+
+            st.markdown("#### Throttle & Integrity Limits")
+            limits_col1, limits_col2, limits_col3 = st.columns(3)
+            with limits_col1:
+                st.metric("Fill Rate Limit / min", health.get("fill_rate_limit_per_minute", "—"))
+            with limits_col2:
+                st.metric("Max Payload (bytes)", health.get("max_body_bytes", "—"))
+            with limits_col3:
+                st.metric("Edge Token Armed", "Yes" if health.get("edge_token_configured") else "No")
+            st.caption(f"WAL audit buffer: `{health.get('wal_buffer_path', 'bouncer_audit.db')}`")
+        else:
+            st.warning(
+                "Unable to reach bouncer health endpoint. Ensure the FastAPI backend is running "
+                "and `API_BASE_URL` resolves (Docker: `http://backend:8000/api/v1`)."
+            )
+
+        st.divider()
+        st.markdown("#### Active API Rejections")
+        if rejections:
+            st.dataframe(
+                pd.DataFrame(rejections),
+                use_container_width=True,
+                hide_index=True,
             )
         else:
-            st.info("WAL buffer queue is empty.")
+            st.info("No rejected ingress payloads recorded in the bouncer WAL buffer.")
+
+        st.divider()
+        st.markdown("#### Live Reconciliation Log")
+        if reconciliations:
+            render_bouncer_reconciliation_dashboard(reconciliations)
+        else:
+            st.info(
+                "No CV reconciliations yet. Run `python3 tests/simulate_cv_traffic.py` "
+                "against the integrated middleware."
+            )
     else:
-        st.dataframe(
-            pd.DataFrame(offline_log_rows),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "timestamp": st.column_config.TextColumn("Timestamp"),
-                "sku_id": st.column_config.TextColumn("SKU ID"),
-                "detected_quantity": st.column_config.NumberColumn("Detected Qty"),
-                "status": st.column_config.TextColumn("Status"),
-            },
+        st.caption(
+            "Click **Refresh bouncer telemetry** to fetch network health, rejections, "
+            "and throttle limits from the FastAPI middleware."
         )
 
 st.divider()

@@ -5,8 +5,12 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from middleware.api_bouncer import ApiBouncerMiddleware
 from middleware.trx_id import TRX_ID_HEADER, TrxIdMiddleware
-from routers import events, telemetry
+from models.bouncer_schemas import CVEdgeDetection, ShelfReconciliation
+from routers import bouncer, events, telemetry
+from services.api_bouncer_engine import process_cv_detection
+from services.bouncer_buffer import ensure_bouncer_buffer
 from services.engine import engine
 from services.simulator import spawn_simulator_task
 
@@ -23,6 +27,7 @@ DEFAULT_CENTRAL_LEDGER_URL = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_bouncer_buffer()
     simulator_task = spawn_simulator_task(engine)
     try:
         yield
@@ -45,9 +50,17 @@ app.add_middleware(
     expose_headers=[TRX_ID_HEADER],
 )
 app.add_middleware(TrxIdMiddleware)
+app.add_middleware(ApiBouncerMiddleware)
 
 app.include_router(telemetry.router)
 app.include_router(events.router)
+app.include_router(bouncer.router)
+
+
+@app.post("/webhook/cv-detection", response_model=ShelfReconciliation, tags=["api-bouncer"])
+def legacy_cv_webhook(payload: CVEdgeDetection):
+    """Backward-compatible edge webhook path used by traffic simulators."""
+    return process_cv_detection(payload)
 
 
 @app.get("/")
