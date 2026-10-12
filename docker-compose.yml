@@ -1,6 +1,7 @@
 services:
   backend:
     build: .
+    container_name: wip-engine-backend
     ports:
       - "8000:8000"
     env_file:
@@ -8,16 +9,24 @@ services:
     environment:
       - WIP_API_KEY=dev-wip-engine-key
       - WIP_PRODUCTS_PATH=/app/data/products.json
+      - BOUNCER_EDGE_TOKEN=edge-cam-prod-992-xtz
+      - BOUNCER_BUFFER_PATH=/app/data/bouncer_audit.db
     volumes:
       - ./data/products.json:/app/data/products.json:ro
+      - bouncer-data:/app/data
     command: uvicorn main:app --host 0.0.0.0 --port 8000
+    networks:
+      - wip-engine-net
+
   frontend:
     build: .
+    container_name: wip-engine-frontend
     ports:
       - "8501:8501"
     environment:
       - API_BASE_URL=http://backend:8000/api/v1
       - WIP_API_KEY=dev-wip-engine-key
+      - BOUNCER_EDGE_TOKEN=edge-cam-prod-992-xtz
     volumes:
       # Host repo bind-mount: `python3 ft-05.py` writes FT-05 artifacts beside dashboard.py
       # (local_sku_weights_ft05.json, offline_detection_buffer_ft05.db + SQLite WAL sidecars).
@@ -25,3 +34,12 @@ services:
     command: streamlit run dashboard.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
       - backend
+    networks:
+      - wip-engine-net
+
+networks:
+  wip-engine-net:
+    driver: bridge
+
+volumes:
+  bouncer-data:
