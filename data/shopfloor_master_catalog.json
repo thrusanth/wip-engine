@@ -23,20 +23,6 @@
     "unit_price_pence": 300
   },
   {
-    "ean": "5040000000128",
-    "product_name": "Sparkling Water 6pk (Promo)",
-    "fixture_type": "FLATTOP",
-    "bom_units": 6,
-    "unit_price_pence": 200
-  },
-  {
-    "ean": "5050000000159",
-    "product_name": "Large Choco Bar 10pk (Promo)",
-    "fixture_type": "FLATTOP",
-    "bom_units": 10,
-    "unit_price_pence": 100
-  },
-  {
     "ean": "5040000000105",
     "product_name": "Flour 1.5kg",
     "fixture_type": "SHELF",

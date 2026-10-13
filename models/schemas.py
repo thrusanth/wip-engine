@@ -110,6 +110,30 @@ class ResolutionEvent(BaseModel):
     resolution_type: ResolutionType
     recovered_units: int = 0
 
+
+class ShopfloorFlattopSkuItem(BaseModel):
+    """Single SKU line on a shopfloor-injected flattop manifest."""
+    sku: str
+    name: str = ""
+    ean: str = ""
+    expected: int = Field(..., ge=0)
+
+    @field_validator("ean")
+    @classmethod
+    def validate_ean(cls, value: str) -> str:
+        if not value:
+            return value
+        return _validate_ean13(value)
+
+
+class ShopfloorFlattopRegistration(BaseModel):
+    """Register or refresh a flattop container in the WIP engine after edge injection."""
+    container_id: str
+    status: ContainerStatus = ContainerStatus.ABANDONED_MID_SHIFT
+    zone: str = "Abandoned Flattop"
+    skus: List[ShopfloorFlattopSkuItem] = Field(..., min_length=1)
+
+
 class FillTelemetryEvent(BaseModel):
     """Payload from edge clients when a shelf fill / POS decrement is observed."""
     event_id: str
