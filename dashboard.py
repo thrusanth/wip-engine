@@ -38,11 +38,21 @@ from mock_data import (
     TAB_TELEMETRY,
     TOTAL_POWER_CUT_STATUS,
     baseline_flattop_ids,
+    canonical_flattop_id,
     catalog_unit_retail_gbp,
     empty_overview_metrics,
+    flattop_is_active_on_board,
+    flattop_is_displayable_in_ui,
     init_session_state_defaults,
+    is_scenario_b_injection_pool_id,
     shelf_sku_max_capacity,
     sku_code_from_queue_row,
+    sync_scenario_b_available_flattops_pool,
+    FLATTOP_UI_DISPLAY_STATUSES,
+    kpi_shrink_units_for_row,
+    flattop_manifest_key,
+    compact_instance_id_for_display,
+    SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
 )
 from state_handlers import (
     extract_offline_recovery_payload,
@@ -50,6 +60,7 @@ from state_handlers import (
     handle_scenario_b_injection,
     load_dashboard_telemetry_from_session,
     merge_backend_waste_metrics,
+    ensure_session_flattops_registered_with_backend,
     preserve_flattop_backlog_on_load,
     reset_dashboard_master_state,
     scenario_a_update_damage,
@@ -108,6 +119,8 @@ st.set_page_config(
 
 init_session_state_defaults()
 preserve_flattop_backlog_on_load()
+ensure_session_flattops_registered_with_backend()
+sync_scenario_b_available_flattops_pool(st.session_state.get("flattops", []))
 
 st.markdown(
     """
@@ -153,6 +166,14 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
     background: rgba(32, 201, 151, 0.12) !important;
     color: #20c997 !important;
     border: 1px solid rgba(32, 201, 151, 0.55) !important;
+}
+.exec-pill-instance-id {
+    background: rgba(108, 117, 125, 0.12) !important;
+    color: #495057 !important;
+    border: 1px solid rgba(108, 117, 125, 0.35) !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.02em;
 }
 .exec-pill-status-verified {
     background: rgba(25, 135, 84, 0.14);
@@ -453,15 +474,18 @@ def _build_flattop_cards_from_queue(
     cards: list[dict] = []
     overlay = containers_overlay or {}
     for ft in st.session_state.flattops:
-        if ft.get("status") != "ABANDONED_MID_SHIFT":
+        if not flattop_is_displayable_in_ui(ft):
             continue
         sku_rows = ft.get("skus") or []
-        if not sku_rows:
-            continue
         flattop_id = ft["flattop_id"]
         container_view = overlay.get(flattop_id) or {}
         zone = container_view.get("zone") or "Abandoned Flattop"
-        container_status = container_view.get("status") or "ABANDONED_MID_SHIFT"
+        queue_status = ft.get("status") or md.FLATTOP_STATUS_ABANDONED
+        container_status = (
+            queue_status
+            if queue_status == md.FLATTOP_STATUS_RESOLVED_HISTORICAL
+            else container_view.get("status") or queue_status
+        )
         backend_skus = {
             str(s.get("sku")): s for s in container_view.get("skus", [])
         }
@@ -479,11 +503,14 @@ def _build_flattop_cards_from_queue(
                 resolution_type = backend.get("resolution_type") or row.get(
                     "resolution_type"
                 )
+                ean_single = _coerce_single_ean_string(
+                    backend.get("ean") or row.get("ean", "")
+                )
                 sku_lines.append(
                     {
                         "sku": sku_code,
                         "name": backend.get("name") or row["product_name"],
-                        "ean": backend.get("ean") or row.get("ean", ""),
+                        "ean": ean_single,
                         "expected": int(backend.get("expected", bom)),
                         "worked": int(backend.get("worked", 0)),
                         "drift": drift,
@@ -502,12 +529,22 @@ def _build_flattop_cards_from_queue(
                     }
                 )
             else:
-                drift = _phantom_drift_for_queue_sku(row, None)
+                shrink_confirmed = int(row.get("shrink_confirmed", 0))
+                finalized = int(
+                    row.get("finalized_shrink_units", shrink_confirmed)
+                )
+                if queue_resolved and row.get("resolution_type") == "none":
+                    drift = finalized
+                elif queue_resolved and row.get("resolution_type") == "partial":
+                    drift = shrink_confirmed
+                else:
+                    drift = _phantom_drift_for_queue_sku(row, None)
+                ean_single = _coerce_single_ean_string(row.get("ean", ""))
                 sku_lines.append(
                     {
                         "sku": sku_code,
                         "name": row["product_name"],
-                        "ean": row.get("ean", ""),
+                        "ean": ean_single,
                         "expected": bom,
                         "worked": 0,
                         "drift": drift,
@@ -516,12 +553,13 @@ def _build_flattop_cards_from_queue(
                         "is_resolved": queue_resolved,
                         "resolution_type": row.get("resolution_type"),
                         "recovered_units": int(row.get("recovered_units", 0)),
-                        "shrink_confirmed": int(row.get("shrink_confirmed", drift)),
+                        "shrink_confirmed": shrink_confirmed or finalized,
                     }
                 )
         cards.append(
             {
                 "container_id": flattop_id,
+                "manifest_instance_id": flattop_manifest_key(ft),
                 "status": container_status,
                 "zone": zone,
                 "sku_lines": sku_lines,
@@ -557,43 +595,35 @@ def _phantom_drift_for_queue_sku(queue_row: dict, backend: dict | None) -> int:
 def _compute_total_phantom_drift_from_flattop_queue(
     containers_overlay: dict | None = None,
 ) -> int:
+    """Live phantom_drift plus finalized shrink units (aligned with Daily Shrink Cost volume)."""
+    del containers_overlay
     total = 0
-    overlay = containers_overlay or {}
-    for ft in st.session_state.flattops:
-        if ft.get("status") != "ABANDONED_MID_SHIFT":
+    for ft in st.session_state.get("flattops") or []:
+        if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
             continue
-        flattop_id = str(ft.get("flattop_id", ""))
-        backend_skus = {
-            str(s.get("sku")): s
-            for s in (overlay.get(flattop_id) or {}).get("skus", [])
-        }
         for row in ft.get("skus") or []:
-            backend = backend_skus.get(_sku_code_from_queue_row(row))
-            total += _phantom_drift_for_queue_sku(row, backend)
+            total += kpi_shrink_units_for_row(row)
     return total
 
 
 def _compute_total_shrink_cost_from_flattop_queue(
     containers_overlay: dict | None = None,
 ) -> float:
-    """Sum phantom drift × unit price across active flattops (recomputed each rerun)."""
+    """Live drift plus finalized shrink write-offs (including historical backlog cards)."""
+    del containers_overlay
     total = 0.0
-    overlay = containers_overlay or {}
-    for ft in st.session_state.flattops:
-        if ft.get("status") != "ABANDONED_MID_SHIFT":
+    for ft in st.session_state.get("flattops") or []:
+        if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
             continue
-        flattop_id = str(ft.get("flattop_id", ""))
-        container_view = overlay.get(flattop_id) or {}
-        backend_skus = {
-            str(s.get("sku")): s for s in container_view.get("skus", [])
-        }
         for row in ft.get("skus") or []:
-            sku_code = _sku_code_from_queue_row(row)
-            backend = backend_skus.get(sku_code)
-            phantom_drift = _phantom_drift_for_queue_sku(row, backend)
-            unit_price = _shrink_unit_price_gbp(row, backend)
-            total += phantom_drift * unit_price
-    return round(total, 2)
+            shrink_units = kpi_shrink_units_for_row(row)
+            if shrink_units <= 0:
+                continue
+            total += shrink_units * _shrink_unit_price_gbp(row, None)
+    session_floor = float(
+        st.session_state.get(SESSION_DAILY_SHRINK_FROM_QUEUE_KEY, 0.0)
+    )
+    return round(max(total, session_floor), 2)
 
 
 def _is_total_power_cut_exception(exc: dict) -> bool:
@@ -856,13 +886,87 @@ for container_id, container in live_containers.items():
             }
         )
 
-def render_execution_sku_profile(name: str, sku: str, ean: str = "") -> None:
+def _coerce_single_ean_string(raw: str | list | tuple | None) -> str:
+    """Normalize any ean field to one string (first list element or first token only)."""
+    if raw is None:
+        return ""
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return ""
+        return str(raw[0]).strip()
+    text = str(raw).strip()
+    if not text:
+        return ""
+    return text.replace(",", " ").split()[0].strip()
+
+
+def _first_ean_from_sku_record(sku_data: dict) -> str:
+    """Single identifier: `ean` field only, else barcode embedded in EAN- SKU alias."""
+    ean = _coerce_single_ean_string(sku_data.get("ean"))
+    if ean:
+        return ean
+    sku_str = str(sku_data.get("sku") or "").strip()
+    if sku_str.upper().startswith("EAN-") and len(sku_str) > 4:
+        return sku_str[4:].strip()
+    return ""
+
+
+def _normalize_sku_profile_record(
+    sku_data: dict | None,
+    *,
+    name: str = "",
+    sku: str = "",
+    ean: str | list | tuple | None = None,
+) -> dict:
+    """View model for SKU profile row — one sku code, one ean string, no list fields."""
+    record = dict(sku_data) if sku_data is not None else {}
+    if sku:
+        record.setdefault("sku", sku)
+    if name:
+        record.setdefault("name", name)
+    if ean is not None and "ean" not in record:
+        record["ean"] = ean
+    record["ean"] = _first_ean_from_sku_record(record)
+    return record
+
+
+def _sku_pill_duplicates_ean_pill(display_sku: str, ean_display: str) -> bool:
+    """True when the SKU pill would repeat the same barcode as the EAN pill."""
+    sku_str = display_sku.strip()
+    ean_str = ean_display.strip()
+    if not sku_str or not ean_str or ean_str == "—":
+        return False
+    if sku_str.upper().startswith("EAN-") and sku_str[4:].strip() == ean_str:
+        return True
+    return sku_str == ean_str
+
+
+def render_execution_sku_profile(
+    name: str,
+    sku: str,
+    ean: str | list | tuple | None = "",
+    *,
+    sku_data: dict | None = None,
+) -> None:
     """SKU profile row shared by live execution cards and offline review cards."""
-    ean_display = ean or "—"
+    record = _normalize_sku_profile_record(
+        sku_data, name=name, sku=sku, ean=ean if sku_data is None else None
+    )
+    display_name = str(record.get("name") or name)
+    display_sku = str(record.get("sku") or sku)
+    ean_display = record.get("ean") or "—"
+    sku_pill_html = ""
+    if display_sku and not _sku_pill_duplicates_ean_pill(display_sku, ean_display):
+        sku_pill_html = (
+            f'<span class="exec-pill exec-pill-sku">{html.escape(display_sku)}</span>'
+        )
+    # Exactly one EAN badge element for this profile line.
+    ean_pill_html = (
+        f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>'
+    )
     st.markdown(
-        f"**SKU Profile:** {html.escape(name)}  \n"
-        f'<span class="exec-pill exec-pill-sku">{html.escape(sku)}</span>'
-        f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>',
+        f"**SKU Profile:** {html.escape(display_name)}  \n"
+        f"{sku_pill_html}{ean_pill_html}",
         unsafe_allow_html=True,
     )
 
@@ -942,7 +1046,7 @@ def render_operational_control_deck(
     if not _requires_operational_control_deck(sku_data):
         return
 
-    container_id = container_data["id"]
+    container_id = md.canonical_flattop_id(container_data["id"])
     sku = sku_data["sku"]
     ean = str(sku_data.get("ean") or "")
     units = _outstanding_units(sku_data)
@@ -1038,7 +1142,7 @@ def _render_execution_telemetry_sku_block(
     product_name = sku_data.get("name", sku_data["sku"])
     if line_index is not None and line_total is not None:
         st.caption(f"SKU line {line_index} of {line_total} on this flattop")
-    render_execution_sku_profile(product_name, sku_data["sku"], sku_data.get("ean", ""))
+    render_execution_sku_profile(product_name, sku_data["sku"], sku_data=sku_data)
 
     metrics_left, metrics_right = st.columns(2)
     with metrics_left:
@@ -1082,6 +1186,35 @@ def _render_execution_telemetry_sku_block(
             )
 
 
+def _session_flattop_by_manifest(manifest_key: str) -> dict | None:
+    for ft in st.session_state.get("flattops") or []:
+        if flattop_manifest_key(ft) == manifest_key:
+            return ft
+    return None
+
+
+def _partition_flattop_cards_for_overview(
+    cards: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Live Scenario B injects vs baseline backlog (includes resolved historical manifests)."""
+    injected: list[dict] = []
+    baseline: list[dict] = []
+    for card in cards:
+        fleet_id = card["container_id"]
+        ft = _session_flattop_by_manifest(
+            card.get("manifest_instance_id") or fleet_id
+        )
+        if (
+            ft is not None
+            and is_scenario_b_injection_pool_id(fleet_id)
+            and flattop_is_active_on_board(ft)
+        ):
+            injected.append(card)
+        else:
+            baseline.append(card)
+    return injected, baseline
+
+
 def _render_flattop_card_grid(
     cards: list[dict], *, card_index_offset: int = 0
 ) -> None:
@@ -1099,8 +1232,12 @@ def render_flattop_execution_telemetry_card(
     flattop_card: dict, *, card_index: int | str
 ) -> None:
     """Multi-SKU flattop card — one audited line per product on the display."""
+    fleet_id = flattop_card["container_id"]
+    manifest_key = flattop_card.get("manifest_instance_id") or fleet_id
     container_data = {
-        "id": flattop_card["container_id"],
+        # Streamlit widget keys must use the instance id (multiple FT-0x historical rows).
+        "id": manifest_key,
+        "fleet_id": fleet_id,
         "status": flattop_card["status"],
         "zone": flattop_card["zone"],
     }
@@ -1108,7 +1245,15 @@ def render_flattop_execution_telemetry_card(
     line_total = len(sku_lines)
 
     with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        st.subheader(f"Execution Telemetry: {container_data['id']}")
+        st.subheader(f"Execution Telemetry: {fleet_id}")
+        short_id = compact_instance_id_for_display(str(manifest_key))
+        if short_id:
+            st.markdown(
+                f'<span class="exec-pill exec-pill-instance-id">ID: {html.escape(short_id)}</span>',
+                unsafe_allow_html=True,
+            )
+        if container_data["status"] == md.FLATTOP_STATUS_RESOLVED_HISTORICAL:
+            st.caption("Resolved historical manifest — read-only audit trail.")
         st.caption(
             f"Last Known State: {container_data['status']} | Zone: {container_data['zone']} | "
             f"{line_total} SKU{'s' if line_total != 1 else ''} on display"
@@ -1121,7 +1266,7 @@ def render_flattop_execution_telemetry_card(
                 sku_data,
                 line_index=index,
                 line_total=line_total,
-                widget_index=f"{card_index}_{index}",
+                widget_index=f"{manifest_key}_{card_index}_{index}",
             )
 
 
@@ -1278,7 +1423,7 @@ def render_offline_review_card(card: dict) -> None:
         subtitle_parts.append(card.get("action_status", ""))
         st.caption(" | ".join(part for part in subtitle_parts if part))
 
-        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_sku_profile(product_name, card["sku"], sku_data=card)
         render_execution_status_pill(status, _offline_status_pill_label(status))
 
         metrics_left, metrics_right = st.columns(2)
@@ -1369,7 +1514,7 @@ def render_power_cut_recovery_card(card: dict) -> None:
         if subtitle_parts:
             st.caption(" | ".join(subtitle_parts))
 
-        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_sku_profile(product_name, card["sku"], sku_data=card)
         render_execution_status_pill(
             TOTAL_POWER_CUT_STATUS,
             TOTAL_POWER_CUT_STATUS,
@@ -1487,13 +1632,9 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(DASHBOARD_TABS)
 with tab1:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
     _all_flattop_cards = _build_flattop_cards_from_queue(live_containers)
-    _baseline_ids = _baseline_flattop_ids()
-    _injected_cards = [
-        card for card in _all_flattop_cards if card["container_id"] not in _baseline_ids
-    ]
-    _baseline_cards = [
-        card for card in _all_flattop_cards if card["container_id"] in _baseline_ids
-    ]
+    _injected_cards, _baseline_cards = _partition_flattop_cards_for_overview(
+        _all_flattop_cards
+    )
 
     st.subheader("Injected Scenarios")
     st.info(
@@ -1508,7 +1649,9 @@ with tab1:
 
     st.divider()
     st.subheader("Baseline Backlog")
-    st.caption("Static mock backlog — FT-02, FT-03, and FT-04.")
+    st.caption(
+        "Baseline mock backlog (FT-02, FT-03, FT-04) plus resolved historical Scenario B manifests."
+    )
     _render_flattop_card_grid(
         _baseline_cards, card_index_offset=len(_injected_cards)
     )
@@ -1864,14 +2007,30 @@ with tab6:
 
     elif scenario_choice.startswith("Scenario B"):
         st.markdown("#### Abandoned Flattop")
-        flattop_id = st.selectbox("Flattop ID", ["FT-01", "FT-02"], key="shopfloor_b_flattop")
+        # Injection pool: idle FT-01 / FT-05 (baseline FT-02/03/04 excluded from pool).
+        # Duplicate-active guard lives in handle_scenario_b_injection — retain for future inline SKU adds.
+        scenario_b_flattop_options = sync_scenario_b_available_flattops_pool(
+            st.session_state.get("flattops", [])
+        )
+        if not scenario_b_flattop_options:
+            st.info("No idle flattops available for injection (FT-01 and FT-05 are already on the queue).")
+        flattop_id = st.selectbox(
+            "Flattop ID",
+            scenario_b_flattop_options or ["FT-01"],
+            key="shopfloor_b_flattop",
+            disabled=not scenario_b_flattop_options,
+        )
         selected_names = st.multiselect(
             "SKUs on flattop — cross-merchandising allowed (max 3)",
             _ALL_PRODUCT_NAMES,
             max_selections=3,
             key="shopfloor_b_skus",
         )
-        if st.button("Inject Scenario B", key="shopfloor_inject_b"):
+        if st.button(
+            "Inject Scenario B",
+            key="shopfloor_inject_b",
+            disabled=not scenario_b_flattop_options,
+        ):
             handle_scenario_b_injection(flattop_id, list(selected_names))
 
     else:

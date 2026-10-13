@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 
@@ -64,6 +65,140 @@ EDGE_AI_WEIGHTS_PATH = REPO_ROOT / "local_sku_weights_ft05.json"
 EDGE_AI_BUFFER_PATH = REPO_ROOT / "offline_detection_buffer_ft05.db"
 
 FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
+
+FLATTOP_FLEET_IDS: list[str] = ["FT-01", "FT-02", "FT-03", "FT-04", "FT-05"]
+FLATTOP_BACKEND_REGISTERED_KEY = "_flattops_backend_registered"
+MANIFEST_INSTANCE_SEQ_KEY = "_manifest_instance_seq"
+SESSION_DAILY_SHRINK_FROM_QUEUE_KEY = "session_daily_shrink_from_queue_gbp"
+
+
+def canonical_flattop_id(raw_id: str | dict) -> str:
+    """Normalize dashboard/API container ids to official fleet format (e.g. FT-02)."""
+    if isinstance(raw_id, dict):
+        slot = raw_id.get("flattop_id") or raw_id.get("id") or ""
+    else:
+        slot = raw_id
+    return str(slot).strip().upper()
+
+
+# Idle fleet slots injectable via Scenario B (FT-02 is baseline backlog only — use FT-05).
+SCENARIO_B_FLATTOP_INJECTION_POOL: list[str] = ["FT-01", "FT-05"]
+
+FLATTOP_STATUS_ABANDONED = "ABANDONED_MID_SHIFT"
+FLATTOP_STATUS_RESOLVED_HISTORICAL = "RESOLVED_HISTORICAL"
+FLATTOP_UI_DISPLAY_STATUSES = frozenset(
+    {FLATTOP_STATUS_ABANDONED, FLATTOP_STATUS_RESOLVED_HISTORICAL}
+)
+
+
+def flattop_queue_sku_is_resolved(row: dict) -> bool:
+    return bool(row.get("is_resolved") or row.get("resolved"))
+
+
+def flattop_all_skus_resolved(ft: dict) -> bool:
+    sku_rows = ft.get("skus") or []
+    return bool(sku_rows) and all(flattop_queue_sku_is_resolved(row) for row in sku_rows)
+
+
+def flattop_is_active_on_board(ft: dict) -> bool:
+    """True while a manifest is on the queue and still has unresolved SKU work."""
+    if ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        return False
+    if ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return False
+    if not (ft.get("skus") or []):
+        return False
+    return not flattop_all_skus_resolved(ft)
+
+
+def new_manifest_instance_id(fleet_id: str) -> str:
+    """Unique backlog key: fleet id + compact suffix (seq + 6-char hash), e.g. FT-05#seq0042-6adf8b."""
+    seq = int(st.session_state.get(MANIFEST_INSTANCE_SEQ_KEY, 0)) + 1
+    st.session_state[MANIFEST_INSTANCE_SEQ_KEY] = seq
+    short_hash = uuid4().hex[:6]
+    compact_suffix = f"seq{seq:04d}-{short_hash}"
+    return f"{canonical_flattop_id(fleet_id)}#{compact_suffix}"
+
+
+def flattop_manifest_key(ft: dict) -> str:
+    return str(ft.get("manifest_instance_id") or canonical_flattop_id(ft))
+
+
+def compact_instance_id_for_display(manifest_instance_id: str) -> str:
+    """Short badge label after '#', e.g. seq0042-6adf8b (legacy long ids truncated for display)."""
+    if "#" not in manifest_instance_id:
+        return ""
+    suffix = manifest_instance_id.split("#", 1)[1].strip()
+    if suffix.startswith("seq") and "-" in suffix:
+        return suffix
+    # Legacy timestamp-style ids — show trailing hash segment or last 8 chars
+    if "-" in suffix:
+        tail = suffix.rsplit("-", 1)[-1]
+        if len(tail) >= 6:
+            return tail[:8]
+    return suffix[:12] if len(suffix) > 12 else suffix
+
+
+def ensure_historical_manifest_instance_ids(flattops: list[dict]) -> None:
+    """Backfill instance ids on legacy RESOLVED_HISTORICAL rows (in-place)."""
+    for ft in flattops:
+        if ft.get("status") != FLATTOP_STATUS_RESOLVED_HISTORICAL:
+            continue
+        if ft.get("manifest_instance_id"):
+            continue
+        ft["manifest_instance_id"] = new_manifest_instance_id(ft.get("flattop_id", ""))
+
+
+def kpi_live_phantom_drift_units_for_row(row: dict) -> int:
+    """Unresolved phantom drift only (live shrink risk)."""
+    if flattop_queue_sku_is_resolved(row):
+        return 0
+    return max(0, int(row.get("phantom_drift", 0)))
+
+
+def kpi_shrink_units_for_row(row: dict) -> int:
+    """Units that count toward daily shrink cost (live drift or finalized write-offs)."""
+    if flattop_queue_sku_is_resolved(row):
+        resolution = row.get("resolution_type")
+        if resolution == "none":
+            return max(
+                0,
+                int(row.get("finalized_shrink_units", row.get("shrink_confirmed", 0))),
+            )
+        if resolution == "partial":
+            return max(0, int(row.get("shrink_confirmed", 0)))
+        return 0
+    return max(0, int(row.get("phantom_drift", 0)))
+
+
+def flattop_is_displayable_in_ui(ft: dict) -> bool:
+    """Queue rows that should render as cards (live or resolved historical)."""
+    if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
+        return False
+    return bool(ft.get("skus"))
+
+
+def is_scenario_b_injection_pool_id(flattop_id: str | dict) -> bool:
+    return canonical_flattop_id(flattop_id) in SCENARIO_B_FLATTOP_INJECTION_POOL
+
+
+def available_flattops_for_scenario_b(flattops: list[dict] | None = None) -> list[str]:
+    """Flattop IDs eligible for Scenario B inject — pool minus manifests actively on the board."""
+    queue = flattops or []
+    active_ids = {
+        canonical_flattop_id(ft) for ft in queue if flattop_is_active_on_board(ft)
+    }
+    return [
+        ft_id for ft_id in SCENARIO_B_FLATTOP_INJECTION_POOL if ft_id not in active_ids
+    ]
+
+
+def sync_scenario_b_available_flattops_pool(flattops: list[dict] | None = None) -> list[str]:
+    """Mirror injection pool into session for UI/helpers (recomputed after each resolution)."""
+    options = available_flattops_for_scenario_b(flattops)
+    st.session_state["available_flattops"] = options
+    return options
+
 
 OFFLINE_CASE_EXPECTED_UNITS = {
     OFFLINE_FILL_AUDIT_SKU: OFFLINE_FILL_AUDIT_QUANTITY,
