@@ -209,6 +209,8 @@ class GlobalMetrics(BaseModel):
     detected_phantom_drift: int = 0
     daily_shrink_cost: float = 0.0
     pending_edge_tasks: int = 0
+    daily_waste_qty: int = 0
+    daily_waste_cost: float = 0.0
 
 class TelemetryResponse(BaseModel):
     """The full payload returned to the frontend."""

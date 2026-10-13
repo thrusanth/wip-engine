@@ -5,8 +5,7 @@
     "fixture_type": "SHELF",
     "bom_units": 12,
     "unit_price_pence": 250,
-    "inner_pack_units": 6,
-    "allow_loose_resale": true
+    "inner_pack_units": 6
   },
   {
     "ean": "5020000000067",
@@ -14,31 +13,35 @@
     "fixture_type": "SHELF",
     "bom_units": 6,
     "unit_price_pence": 150,
-    "inner_pack_units": 6,
-    "allow_loose_resale": false
+    "inner_pack_units": 6
   },
   {
     "ean": "5030000000098",
-    "product_name": "Lemonade 6pk",
+    "product_name": "Lemonade 2L",
     "fixture_type": "SHELF",
     "bom_units": 6,
-    "unit_price_pence": 300,
-    "allow_loose_resale": true
+    "unit_price_pence": 300
   },
   {
     "ean": "5040000000128",
     "product_name": "Sparkling Water 6pk (Promo)",
     "fixture_type": "FLATTOP",
     "bom_units": 6,
-    "unit_price_pence": 200,
-    "allow_loose_resale": true
+    "unit_price_pence": 200
   },
   {
     "ean": "5050000000159",
     "product_name": "Large Choco Bar 10pk (Promo)",
     "fixture_type": "FLATTOP",
     "bom_units": 10,
-    "unit_price_pence": 100,
-    "allow_loose_resale": true
+    "unit_price_pence": 100
+  },
+  {
+    "ean": "5040000000105",
+    "product_name": "Flour 1.5kg",
+    "fixture_type": "SHELF",
+    "bom_units": 12,
+    "unit_price_pence": 250,
+    "inner_pack_units": 12
   }
 ]

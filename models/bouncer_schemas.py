@@ -18,7 +18,6 @@ class ExpectedLedger(BaseModel):
     volume_litres: Optional[float] = None
     excise_duty: Optional[float] = None
     vat_amount: Optional[float] = None
-    allow_loose_resale: bool = True
 
 
 class CVEdgeDetection(BaseModel):

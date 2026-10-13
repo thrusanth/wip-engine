@@ -28,6 +28,12 @@ if "fixture_type" not in st.session_state:
     st.session_state.fixture_type = ["SHELF"]
 if "sku_alert" not in st.session_state:
     st.session_state.sku_alert = 0
+if "daily_waste_qty" not in st.session_state:
+    st.session_state.daily_waste_qty = 0
+if "daily_waste_cost" not in st.session_state:
+    st.session_state.daily_waste_cost = 0.00
+if "daily_shrink_cost" not in st.session_state:
+    st.session_state.daily_shrink_cost = 0.00
 
 st.markdown(
     """
@@ -477,6 +483,41 @@ def filter_containers_for_live_tabs(
     return filtered
 
 
+def _merge_backend_waste_metrics(metrics: dict) -> dict:
+    """Pull H&S waste KPIs from backend SQLite (survives cached telemetry reruns)."""
+    try:
+        response = requests.get(f"{API_BASE_URL}/telemetry", timeout=3)
+        if response.status_code == 200:
+            backend_metrics = response.json().get("metrics", {})
+            merged = dict(metrics)
+            merged["daily_waste_qty"] = backend_metrics.get(
+                "daily_waste_qty", merged.get("daily_waste_qty", 0)
+            )
+            merged["daily_waste_cost"] = backend_metrics.get(
+                "daily_waste_cost", merged.get("daily_waste_cost", 0.0)
+            )
+            return merged
+    except requests.exceptions.RequestException:
+        pass
+    return metrics
+
+
+def _sync_kpi_session_state(metrics: dict, container_phantom_shrink: float) -> None:
+    """Persist waste/shrink KPIs in Streamlit session across reruns."""
+    backend_waste_qty = int(metrics.get("daily_waste_qty") or 0)
+    backend_waste_cost = float(metrics.get("daily_waste_cost") or 0.0)
+    st.session_state.daily_waste_qty = max(
+        int(st.session_state.daily_waste_qty), backend_waste_qty
+    )
+    st.session_state.daily_waste_cost = max(
+        float(st.session_state.daily_waste_cost), backend_waste_cost
+    )
+    st.session_state.daily_shrink_cost = round(
+        float(container_phantom_shrink) + float(st.session_state.daily_waste_cost),
+        2,
+    )
+
+
 def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
     """Recompute drift/task metrics from quarantined live containers only."""
     total_drift = 0
@@ -495,11 +536,17 @@ def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
         if container_pending:
             pending_edge_tasks += 1
 
+    waste_qty = int(base_metrics.get("daily_waste_qty") or 0)
+    waste_cost = float(base_metrics.get("daily_waste_cost") or 0.0)
+
     return {
         **base_metrics,
         "active_flattops": len(containers),
         "detected_phantom_drift": total_drift,
-        "daily_shrink_cost": total_shrink_cost,
+        "daily_waste_qty": waste_qty,
+        "daily_waste_cost": waste_cost,
+        "container_phantom_shrink_cost": total_shrink_cost,
+        "daily_shrink_cost": total_shrink_cost + waste_cost,
         "pending_edge_tasks": pending_edge_tasks,
     }
 
@@ -526,7 +573,11 @@ def _extract_offline_recovery_payload(payload: dict) -> tuple[list, list, list]:
 def _persist_dashboard_telemetry(payload: dict) -> None:
     """Store latest telemetry in session so cards re-render with updated metrics."""
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = payload.get("containers", {})
-    st.session_state[_DASHBOARD_METRICS_KEY] = payload.get("metrics", {})
+    metrics = dict(payload.get("metrics") or {})
+    metrics["daily_waste_qty"] = st.session_state.daily_waste_qty
+    metrics["daily_waste_cost"] = st.session_state.daily_waste_cost
+    metrics["daily_shrink_cost"] = st.session_state.daily_shrink_cost
+    st.session_state[_DASHBOARD_METRICS_KEY] = metrics
     offline_fills, gap_audit, gap_exceptions = _extract_offline_recovery_payload(payload)
     st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fills
     st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = gap_audit
@@ -595,6 +646,8 @@ try:
             "detected_phantom_drift": 0,
             "daily_shrink_cost": 0.0,
             "pending_edge_tasks": 0,
+            "daily_waste_qty": 0,
+            "daily_waste_cost": 0.0,
         }
         offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
         inventory_gap_audit = st.session_state.get(_DASHBOARD_INVENTORY_GAP_KEY, [])
@@ -621,7 +674,9 @@ try:
                 "active_flattops": 0,
                 "detected_phantom_drift": 0,
                 "daily_shrink_cost": 0.0,
-                "pending_edge_tasks": 0
+                "pending_edge_tasks": 0,
+                "daily_waste_qty": 0,
+                "daily_waste_cost": 0.0,
             }
             containers = {}
             offline_fill_audit = []
@@ -629,6 +684,8 @@ try:
             offline_gap_exceptions = []
             active_exceptions = []
             manifest_auto_confirm_audit = []
+
+    metrics = _merge_backend_waste_metrics(metrics)
 
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
     st.session_state[_DASHBOARD_METRICS_KEY] = metrics
@@ -643,11 +700,15 @@ except Exception as e:
 
 live_containers = filter_containers_for_live_tabs(containers, active_exceptions)
 live_metrics = derive_live_overview_metrics(live_containers, metrics)
+_sync_kpi_session_state(
+    metrics,
+    float(live_metrics.get("container_phantom_shrink_cost") or 0.0),
+)
 
 # ---------------------------------------------------------
 # Top Header Section: Global Metrics
 # ---------------------------------------------------------
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 with col1:
     st.metric(label="Pending Delivery Cages", value=live_metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
 with col2:
@@ -655,12 +716,31 @@ with col2:
 with col3:
     st.metric(label="Detected Phantom Drift Units", value=live_metrics["detected_phantom_drift"], delta="Shrink Risk", delta_color="inverse")
 with col4:
-    st.metric(label="Daily Shrink Cost", value=f"£{live_metrics['daily_shrink_cost']:,.2f}", delta="Revenue Lost", delta_color="inverse")
+    st.metric(
+        label="Daily Shrink Cost",
+        value=f"£{st.session_state.daily_shrink_cost:.2f}",
+        delta="Revenue Lost",
+        delta_color="inverse",
+    )
 with col5:
     if live_metrics["pending_edge_tasks"] > 0:
         st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="Action Required", delta_color="inverse")
     else:
         st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
+with col6:
+    st.metric(
+        label="Daily Waste QTY",
+        value=st.session_state.daily_waste_qty,
+        delta="↑ Scenario A Write-offs",
+        delta_color="inverse",
+    )
+with col7:
+    st.metric(
+        label="Daily Waste Cost",
+        value=f"£{st.session_state.daily_waste_cost:.2f}",
+        delta="↑ Known Margin Lost",
+        delta_color="inverse",
+    )
 
 telemetry_rows = []
 for container_id, container in live_containers.items():
@@ -1474,6 +1554,15 @@ with tab5:
             try:
                 response = requests.delete(f"{API_BASE_URL}/bouncer/purge", timeout=5)
                 if response.status_code == 200:
+                    st.session_state.daily_waste_qty = 0
+                    st.session_state.daily_waste_cost = 0.00
+                    st.session_state.daily_shrink_cost = 0.00
+                    cached_metrics = st.session_state.get(_DASHBOARD_METRICS_KEY)
+                    if isinstance(cached_metrics, dict):
+                        cached_metrics["daily_waste_qty"] = 0
+                        cached_metrics["daily_waste_cost"] = 0.0
+                        cached_metrics["daily_shrink_cost"] = 0.0
+                        st.session_state[_DASHBOARD_METRICS_KEY] = cached_metrics
                     st.rerun()
                 else:
                     st.error(

@@ -29,7 +29,6 @@ MASTER_CATALOG_ROWS: list[dict[str, Any]] = [
         "bom_units": 12,
         "unit_price_pence": 250,
         "inner_pack_units": 6,
-        "allow_loose_resale": True,
     },
     {
         "ean": "5020000000067",
@@ -38,15 +37,13 @@ MASTER_CATALOG_ROWS: list[dict[str, Any]] = [
         "bom_units": 6,
         "unit_price_pence": 150,
         "inner_pack_units": 6,
-        "allow_loose_resale": False,
     },
     {
         "ean": "5030000000098",
-        "product_name": "Lemonade 6pk",
+        "product_name": "Lemonade 2L",
         "fixture_type": "SHELF",
         "bom_units": 6,
         "unit_price_pence": 300,
-        "allow_loose_resale": True,
     },
     {
         "ean": "5040000000128",
@@ -54,7 +51,6 @@ MASTER_CATALOG_ROWS: list[dict[str, Any]] = [
         "fixture_type": "FLATTOP",
         "bom_units": 6,
         "unit_price_pence": 200,
-        "allow_loose_resale": True,
     },
     {
         "ean": "5050000000159",
@@ -62,7 +58,14 @@ MASTER_CATALOG_ROWS: list[dict[str, Any]] = [
         "fixture_type": "FLATTOP",
         "bom_units": 10,
         "unit_price_pence": 100,
-        "allow_loose_resale": True,
+    },
+    {
+        "ean": "5040000000105",
+        "product_name": "Flour 1.5kg",
+        "fixture_type": "SHELF",
+        "bom_units": 12,
+        "unit_price_pence": 250,
+        "inner_pack_units": 12,
     },
 ]
 
@@ -82,9 +85,6 @@ def _normalize_catalog_row(raw: dict[str, Any]) -> dict[str, Any]:
     bom = int(raw["bom_units"])
     inner_raw = raw.get("inner_pack_units")
     inner_pack = int(inner_raw) if inner_raw is not None else bom
-    allow_loose = raw.get("allow_loose_resale", True)
-    if isinstance(allow_loose, str):
-        allow_loose = allow_loose.strip().lower() in ("1", "true", "yes")
     return {
         "ean": str(raw["ean"]).strip(),
         "product_name": str(raw["product_name"]).strip(),
@@ -92,7 +92,6 @@ def _normalize_catalog_row(raw: dict[str, Any]) -> dict[str, Any]:
         "bom_units": bom,
         "unit_price_pence": int(raw["unit_price_pence"]),
         "inner_pack_units": inner_pack,
-        "allow_loose_resale": bool(allow_loose),
     }
 
 
@@ -144,6 +143,10 @@ def catalog_by_product_name() -> dict[str, dict[str, Any]]:
     return {row["product_name"]: row for row in load_master_catalog()}
 
 
+def catalog_by_ean() -> dict[str, dict[str, Any]]:
+    return {row["ean"]: row for row in load_master_catalog()}
+
+
 def parent_sku_for_ean(ean: str) -> str:
     return f"EAN-{ean}"
 
@@ -171,7 +174,6 @@ def build_master_ledger_db() -> dict[str, ExpectedLedger]:
                 retail_price=multipack_retail,
                 pack_quantity=inner_pack,
                 is_alcohol=False,
-                allow_loose_resale=normalized["allow_loose_resale"],
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping shopfloor ledger row %r: %s", row, exc)
@@ -191,24 +193,21 @@ def init_shopfloor_catalog_db() -> None:
                 fixture_type TEXT NOT NULL,
                 bom_units INTEGER NOT NULL,
                 unit_price_pence INTEGER NOT NULL,
-                inner_pack_units INTEGER,
-                allow_loose_resale INTEGER NOT NULL DEFAULT 1
+                inner_pack_units INTEGER
             )
             """
         )
-        for alter_sql in (
-            "ALTER TABLE shopfloor_master_catalog ADD COLUMN inner_pack_units INTEGER",
-            "ALTER TABLE shopfloor_master_catalog ADD COLUMN allow_loose_resale INTEGER NOT NULL DEFAULT 1",
-        ):
-            try:
-                conn.execute(alter_sql)
-            except sqlite3.OperationalError:
-                pass
+        try:
+            conn.execute(
+                "ALTER TABLE shopfloor_master_catalog ADD COLUMN inner_pack_units INTEGER"
+            )
+        except sqlite3.OperationalError:
+            pass
         conn.executemany(
             """
             INSERT OR REPLACE INTO shopfloor_master_catalog
-                (ean, product_name, fixture_type, bom_units, unit_price_pence, inner_pack_units, allow_loose_resale)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (ean, product_name, fixture_type, bom_units, unit_price_pence, inner_pack_units)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -218,7 +217,6 @@ def init_shopfloor_catalog_db() -> None:
                     int(row["bom_units"]),
                     int(row["unit_price_pence"]),
                     int(row.get("inner_pack_units", row["bom_units"])),
-                    1 if row.get("allow_loose_resale", True) else 0,
                 )
                 for row in rows
             ],

@@ -16,7 +16,12 @@ from models.bouncer_schemas import (
     TransactionEnginePayload,
 )
 from services.bouncer_buffer import record_reconciliation
-from services.shopfloor_catalog import build_master_ledger_db, parent_sku_for_ean
+from services.waste_metrics import record_scenario_a_waste
+from services.shopfloor_catalog import (
+    build_master_ledger_db,
+    catalog_by_ean,
+    parent_sku_for_ean,
+)
 
 MUP_RATE_PER_UNIT = float(os.getenv("BOUNCER_MUP_RATE_PER_UNIT", "0.65"))
 
@@ -123,6 +128,50 @@ def _ledger_for_ean(ean: str) -> Optional[ExpectedLedger]:
     return CENTRAL_LEDGER_DB.get(parent_sku_for_ean(ean))
 
 
+def _torn_routing_product_name(
+    payload: CVEdgeDetection,
+    ledger_data: ExpectedLedger,
+) -> str:
+    if payload.product_name and str(payload.product_name).strip():
+        return str(payload.product_name).strip()
+    catalog_row = catalog_by_ean().get(ledger_data.ean)
+    if catalog_row:
+        return str(catalog_row["product_name"])
+    return ledger_data.parent_sku
+
+
+def _apply_health_and_safety_writeoff(
+    payload: CVEdgeDetection,
+    ledger_data: ExpectedLedger,
+    *,
+    status_code: str,
+    format_alert: str,
+) -> tuple[str, str, str, TransactionEnginePayload, None]:
+    damaged_qty = int(payload.loose_units_visible)
+    waste_value = round(damaged_qty * ledger_data.retail_price, 2)
+    record_scenario_a_waste(damaged_qty, waste_value)
+    stock_key = payload.parent_sku
+    stock_adj = {stock_key: -damaged_qty}
+    writeoff_rule = (
+        "NON_COMPLIANT_FOOD_SAFETY [Action: Automatically deducted "
+        f"{damaged_qty} from stock record & routed to H&S Waste Profile. 0 yield.]"
+    )
+    transaction_payload = TransactionEnginePayload(
+        transaction_type="HEALTH_AND_SAFETY_WRITEOFF",
+        reason_code="DAMAGED_UNSEALED_FOOD_PACK",
+        ledger_adjustments=stock_adj,
+        compliance_rule_applied=writeoff_rule,
+        adjustment_summary=(
+            f"Adj: {{'{stock_key}': -{damaged_qty}}} -> DEST: H&S_WASTE_PROFILE"
+        ),
+    )
+    shop_floor_action = (
+        "DISPATCH_COLLEAGUE: Bag the damaged items. No manual scanning required "
+        "(Waste profile updated automatically)."
+    )
+    return status_code, format_alert, shop_floor_action, transaction_payload, None
+
+
 def _apply_torn_multipack_violation(
     payload: CVEdgeDetection,
     ledger_data: ExpectedLedger,
@@ -134,28 +183,15 @@ def _apply_torn_multipack_violation(
     )
     shop_floor_action = "DISPATCH_COLLEAGUE: Remove loose units & attach markdown label."
 
-    if not ledger_data.allow_loose_resale:
-        damaged_qty = int(payload.loose_units_visible)
-        stock_key = payload.parent_sku
-        stock_adj = {stock_key: -damaged_qty}
-        writeoff_rule = (
-            "NON_COMPLIANT_FOOD_SAFETY [Action: Automatically deducted "
-            f"{damaged_qty} from stock record & routed to H&S Waste Profile. 0 yield.]"
+    product_name = _torn_routing_product_name(payload, ledger_data)
+    is_master_ean_sku = ledger_data.parent_sku.startswith("EAN-")
+    if is_master_ean_sku and "multipack" not in product_name.lower():
+        return _apply_health_and_safety_writeoff(
+            payload,
+            ledger_data,
+            status_code=status_code,
+            format_alert=format_alert,
         )
-        transaction_payload = TransactionEnginePayload(
-            transaction_type="HEALTH_AND_SAFETY_WRITEOFF",
-            reason_code="DAMAGED_UNSEALED_FOOD_PACK",
-            ledger_adjustments=stock_adj,
-            compliance_rule_applied=writeoff_rule,
-            adjustment_summary=(
-                f"Adj: {{'{stock_key}': -{damaged_qty}}} -> DEST: H&S_WASTE_PROFILE"
-            ),
-        )
-        shop_floor_action = (
-            "DISPATCH_COLLEAGUE: Bag the damaged items. No manual scanning required "
-            "(Waste profile updated automatically)."
-        )
-        return status_code, format_alert, shop_floor_action, transaction_payload, None
 
     multipack_retail = ledger_data.retail_price
     inner_pack_size = ledger_data.pack_quantity
