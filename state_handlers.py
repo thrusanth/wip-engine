@@ -280,6 +280,70 @@ def apply_all_found_to_flattop_queue(
             return
 
 
+def _flattop_all_skus_resolved_in_queue(container_id: str) -> bool:
+    for ft in st.session_state.flattops:
+        if str(ft.get("flattop_id")) != str(container_id):
+            continue
+        sku_rows = ft.get("skus") or []
+        if not sku_rows:
+            return False
+        return all(
+            bool(row.get("is_resolved") or row.get("resolved"))
+            for row in sku_rows
+        )
+    return False
+
+
+def maybe_decrement_pending_edge_tasks(container_id: str, response_payload: dict) -> None:
+    """Drop pending task count when every SKU on the flattop is resolved."""
+    container = (response_payload.get("containers") or {}).get(str(container_id)) or {}
+    backend_skus = container.get("skus") or []
+    backend_cleared = bool(backend_skus) and all(
+        row.get("is_resolved") for row in backend_skus
+    )
+    if backend_cleared or _flattop_all_skus_resolved_in_queue(container_id):
+        st.session_state[KPI_SESSION_PENDING_EDGE_TASKS] = max(
+            0,
+            int(st.session_state.get(KPI_SESSION_PENDING_EDGE_TASKS, 0)) - 1,
+        )
+
+
+def apply_partial_to_flattop_queue(
+    container_id: str,
+    sku: str,
+    recovered_units: int,
+    *,
+    outstanding_before: int = 0,
+) -> None:
+    """Finalize partial recovery: backstock recovered units, drift = unrecovered remainder."""
+    recovered = max(0, int(recovered_units))
+    outstanding = max(0, int(outstanding_before))
+    target_sku = str(sku)
+    for ft in st.session_state.flattops:
+        if str(ft.get("flattop_id")) != str(container_id):
+            continue
+        if ft.get("status") != "ABANDONED_MID_SHIFT":
+            continue
+        for row in ft.get("skus") or []:
+            if sku_code_from_queue_row(row) != target_sku:
+                continue
+            if outstanding <= 0:
+                outstanding = int(
+                    row.get("phantom_drift", row.get("bom_units", 0))
+                )
+            recovered = min(recovered, outstanding)
+            remainder = max(0, outstanding - recovered)
+            row["phantom_drift"] = remainder
+            row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
+            row["recovered_units"] = recovered
+            row["shrink_confirmed"] = remainder
+            row["is_resolved"] = True
+            row["resolved"] = True
+            row["resolution_type"] = "partial"
+            row["status"] = "Partial Shrink Confirmed"
+            return
+
+
 def catalog_rows_to_flattop_queue_skus(catalog_rows: list[dict]) -> list[dict]:
     """Bouncer / Scenario B queue rows with explicit phantom drift and unit price."""
     queue_skus: list[dict] = []
@@ -350,6 +414,16 @@ def submit_resolution(
                 recovered_units,
                 outstanding_before=outstanding_before,
             )
+        elif resolution_type == "partial":
+            apply_partial_to_flattop_queue(
+                container_id,
+                sku,
+                recovered_units,
+                outstanding_before=outstanding_before,
+            )
+        elif resolution_type == "none":
+            pass
+        maybe_decrement_pending_edge_tasks(container_id, resolution_payload)
         persist_dashboard_telemetry(resolution_payload)
         if partial_flag_key is not None:
             st.session_state[partial_flag_key] = False

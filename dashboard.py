@@ -470,10 +470,15 @@ def _build_flattop_cards_from_queue(
             sku_code = _sku_code_from_queue_row(row)
             bom = int(row.get("bom_units", 0))
             backend = backend_skus.get(sku_code)
+            queue_resolved = bool(row.get("is_resolved") or row.get("resolved"))
             if backend:
                 drift = int(backend.get("drift", 0))
                 if drift <= 0:
                     drift = _phantom_drift_for_queue_sku(row, backend)
+                is_resolved = bool(backend.get("is_resolved", False)) or queue_resolved
+                resolution_type = backend.get("resolution_type") or row.get(
+                    "resolution_type"
+                )
                 sku_lines.append(
                     {
                         "sku": sku_code,
@@ -482,12 +487,18 @@ def _build_flattop_cards_from_queue(
                         "expected": int(backend.get("expected", bom)),
                         "worked": int(backend.get("worked", 0)),
                         "drift": drift,
-                        "backstock": int(backend.get("backstock", 0)),
+                        "backstock": int(
+                            backend.get("backstock", row.get("sent_to_backstock", 0))
+                        ),
                         "variance": int(backend.get("variance", drift)),
-                        "is_resolved": bool(backend.get("is_resolved", False)),
-                        "resolution_type": backend.get("resolution_type"),
-                        "recovered_units": int(backend.get("recovered_units", 0)),
-                        "shrink_confirmed": int(backend.get("shrink_confirmed", 0)),
+                        "is_resolved": is_resolved,
+                        "resolution_type": resolution_type,
+                        "recovered_units": int(
+                            backend.get("recovered_units", row.get("recovered_units", 0))
+                        ),
+                        "shrink_confirmed": int(
+                            backend.get("shrink_confirmed", row.get("shrink_confirmed", 0))
+                        ),
                     }
                 )
             else:
@@ -500,9 +511,12 @@ def _build_flattop_cards_from_queue(
                         "expected": bom,
                         "worked": 0,
                         "drift": drift,
-                        "backstock": 0,
+                        "backstock": int(row.get("sent_to_backstock", 0)),
                         "variance": drift,
-                        "is_resolved": False,
+                        "is_resolved": queue_resolved,
+                        "resolution_type": row.get("resolution_type"),
+                        "recovered_units": int(row.get("recovered_units", 0)),
+                        "shrink_confirmed": int(row.get("shrink_confirmed", drift)),
                     }
                 )
         cards.append(

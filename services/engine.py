@@ -576,15 +576,9 @@ class WipEngine:
                 if routed <= 0:
                     raise ValueError("Partial resolution requires at least one recovered unit")
                 target_sku.backstock += routed
-                remaining = outstanding - routed
-                if remaining <= 0:
-                    target_sku.is_resolved = True
-                    target_sku.resolution_type = ResolutionType.PARTIAL
-                    target_sku.recovered_units = routed
-                else:
-                    target_sku.is_resolved = False
-                    target_sku.resolution_type = None
-                    target_sku.recovered_units = 0
+                target_sku.is_resolved = True
+                target_sku.resolution_type = ResolutionType.PARTIAL
+                target_sku.recovered_units = routed
             elif event.resolution_type == ResolutionType.NONE:
                 target_sku.is_resolved = True
                 target_sku.resolution_type = ResolutionType.NONE
