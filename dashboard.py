@@ -9,7 +9,10 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
+from services.shopfloor_catalog import catalog_by_product_name, load_master_catalog
+from utils.transmit_scenario import inject_custom_payload
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
 API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
 
 # 1. Page Configuration
@@ -18,6 +21,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+if "active_ean" not in st.session_state:
+    st.session_state.active_ean = []
+if "fixture_type" not in st.session_state:
+    st.session_state.fixture_type = ["SHELF"]
+if "sku_alert" not in st.session_state:
+    st.session_state.sku_alert = 0
 
 st.markdown(
     """
@@ -166,7 +176,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
     """Single table row — ported from api_bouncer/main.py get_dashboard()."""
     payload = _bouncer_row_payload(row)
     trace_id = html.escape(str(row.get("trace_id") or payload.get("trace_id") or ""))
-    sku = html.escape(str(row.get("sku") or payload.get("sku") or ""))
+    product_name = html.escape(_bouncer_product_display_name(row))
     ean = html.escape(str(row.get("ean") or payload.get("ean") or ""))
     status = str(row.get("status") or payload.get("status") or "")
     format_alert = html.escape(str(row.get("format_alert") or payload.get("format_alert") or ""))
@@ -213,7 +223,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
         "<tr>"
         "<td>"
         f'<span class="bouncer-trace-id">{trace_id}</span><br>'
-        f'<span class="bouncer-sku-label">{sku}</span><br>'
+        f'<span class="bouncer-sku-label">{product_name}</span><br>'
         f'<span class="bouncer-ean-pill">EAN {ean}</span>'
         "</td>"
         f'<td><span class="bouncer-badge {status_class}">{status_icon} {status_esc}</span></td>'
@@ -340,13 +350,68 @@ TAB_TELEMETRY = "Telemetry & Exceptions"
 TAB_OFFLINE_FILL = "Offline Fill"
 TAB_EDGE_AI = "Edge AI Autonomy"
 TAB_API_BOUNCER = "API Bouncer"
+TAB_SHOPFLOOR_SCENARIOS = "Shopfloor Scenarios"
 DASHBOARD_TABS = [
     TAB_SYSTEM_OVERVIEW,
     TAB_TELEMETRY,
     TAB_OFFLINE_FILL,
     TAB_EDGE_AI,
     TAB_API_BOUNCER,
+    TAB_SHOPFLOOR_SCENARIOS,
 ]
+
+_MASTER_CATALOG = load_master_catalog()
+_CATALOG_BY_NAME = catalog_by_product_name()
+_SHELF_PRODUCT_NAMES = [
+    row["product_name"] for row in _MASTER_CATALOG if row["fixture_type"] == "SHELF"
+]
+_ALL_PRODUCT_NAMES = [row["product_name"] for row in _MASTER_CATALOG]
+_CATALOG_BY_EAN = {row["ean"]: row["product_name"] for row in _MASTER_CATALOG}
+
+
+def _bouncer_product_display_name(row: dict) -> str:
+    """Human-readable product title for the reconciliation log (master catalog fallback)."""
+    payload = _bouncer_row_payload(row)
+    explicit = payload.get("product_name") or row.get("product_name")
+    if explicit:
+        return str(explicit).strip()
+    ean = str(row.get("ean") or payload.get("ean") or "").strip()
+    if ean and ean in _CATALOG_BY_EAN:
+        return _CATALOG_BY_EAN[ean]
+    parent_sku = str(row.get("sku") or payload.get("sku") or "").strip()
+    if parent_sku.startswith("EAN-") and len(parent_sku) > 4:
+        catalog_name = _CATALOG_BY_EAN.get(parent_sku[4:])
+        if catalog_name:
+            return catalog_name
+    return parent_sku or "Unknown product"
+
+
+def _shelf_sku_max_capacity(product_name: str) -> int:
+    """Inner pack size for shelf damage UI (falls back to BOM/case units)."""
+    row = _CATALOG_BY_NAME[product_name]
+    inner = row.get("inner_pack_units")
+    if inner is not None:
+        return int(inner)
+    return int(row["bom_units"])
+
+
+def _sync_scenario_a_on_sku_change() -> None:
+    product_name = st.session_state.get("shopfloor_a_sku") or _SHELF_PRODUCT_NAMES[0]
+    max_capacity = _shelf_sku_max_capacity(product_name)
+    st.session_state.scenario_a_max_capacity = max_capacity
+    st.session_state.filled_qty = max_capacity
+    st.session_state.damaged_qty = 0
+
+
+def _scenario_a_update_fill() -> None:
+    max_capacity = int(st.session_state.scenario_a_max_capacity)
+    st.session_state.damaged_qty = max_capacity - int(st.session_state.filled_qty)
+
+
+def _scenario_a_update_damage() -> None:
+    max_capacity = int(st.session_state.scenario_a_max_capacity)
+    st.session_state.filled_qty = max_capacity - int(st.session_state.damaged_qty)
+
 
 TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
 
@@ -623,6 +688,191 @@ def render_execution_sku_profile(name: str, sku: str, ean: str = "") -> None:
         f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>',
         unsafe_allow_html=True,
     )
+
+
+def _unaccounted_variance_value(sku_data: dict) -> int:
+    if sku_data.get("is_resolved"):
+        return 0
+    return int(sku_data.get("variance", 0))
+
+
+def render_unaccounted_variance_metric(
+    sku_data: dict,
+    *,
+    delta: str | None = None,
+    delta_color: str = "normal",
+) -> None:
+    metric_kwargs = {"label": "Unaccounted Variance", "value": _unaccounted_variance_value(sku_data)}
+    if delta is not None:
+        metric_kwargs["delta"] = delta
+        metric_kwargs["delta_color"] = delta_color
+    st.metric(**metric_kwargs)
+
+
+def _sku_widget_slug(sku: str) -> str:
+    return sku.replace("-", "_").lower()
+
+
+def _operational_widget_key(action: str, container_id: str, sku: str) -> str:
+    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
+
+
+def _outstanding_units(sku_data: dict) -> int:
+    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
+
+
+def _requires_operational_control_deck(sku_data: dict) -> bool:
+    if sku_data.get("is_resolved"):
+        return False
+    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
+
+
+def _container_view_from_task(task: dict) -> dict:
+    return {
+        "id": task["container_id"],
+        "status": task["status"],
+        "zone": task["zone"],
+    }
+
+
+def _sku_view_from_task(task: dict) -> dict:
+    container_fields = {"container_id", "status", "zone"}
+    return {key: value for key, value in task.items() if key not in container_fields}
+
+
+def render_operational_control_deck(container_data, sku_data) -> None:
+    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+    if not _requires_operational_control_deck(sku_data):
+        return
+
+    container_id = container_data["id"]
+    sku = sku_data["sku"]
+    units = _outstanding_units(sku_data)
+    partial_flag = _operational_widget_key("show_partial", container_id, sku)
+
+    if partial_flag not in st.session_state:
+        st.session_state[partial_flag] = False
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    ctrl_cols = st.columns(3)
+    with ctrl_cols[0]:
+        if st.button(
+            f"All Found ({units})",
+            key=_operational_widget_key("all_found", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "all", units, partial_flag_key=partial_flag)
+
+    with ctrl_cols[1]:
+        if st.button(
+            "Not Present (0)",
+            key=_operational_widget_key("not_present", container_id, sku),
+            use_container_width=True,
+        ):
+            submit_resolution(container_id, sku, "none", 0, partial_flag_key=partial_flag)
+
+    with ctrl_cols[2]:
+        if st.button(
+            f"Partial ({units})",
+            key=_operational_widget_key("partial", container_id, sku),
+            use_container_width=True,
+        ):
+            st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    if st.session_state.get(partial_flag, False):
+        st.warning("Partial recovery in progress — enter quantity recovered below.")
+        partial_col1, partial_col2 = st.columns([2, 1])
+        with partial_col1:
+            max_partial = max(1, units - 1) if units > 1 else 1
+            partial_qty = st.number_input(
+                "Quantity Recovered?",
+                min_value=1,
+                max_value=max_partial,
+                value=1,
+                key=_operational_widget_key("partial_qty", container_id, sku),
+            )
+        with partial_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(
+                "Confirm Partial",
+                type="primary",
+                key=_operational_widget_key("confirm_partial", container_id, sku),
+            ):
+                submit_resolution(
+                    container_id,
+                    sku,
+                    "partial",
+                    partial_qty,
+                    partial_flag_key=partial_flag,
+                )
+
+
+def render_execution_telemetry_card(task: dict) -> None:
+    """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
+    container_data = _container_view_from_task(task)
+    sku_data = _sku_view_from_task(task)
+    product_name = sku_data.get("name", sku_data["sku"])
+
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.subheader(f"Execution Telemetry: {container_data['id']}")
+        st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
+        render_execution_sku_profile(product_name, sku_data["sku"], sku_data.get("ean", ""))
+
+        metrics_left, metrics_right = st.columns(2)
+        with metrics_left:
+            st.metric("Expected Quantity", sku_data["expected"])
+            st.metric("Sent to Backstock", sku_data.get("backstock", 0))
+        with metrics_right:
+            st.metric("Worked to Shelf", sku_data["worked"])
+            st.metric("Phantom Drift", sku_data["drift"])
+
+        st.markdown("---")
+        render_unaccounted_variance_metric(sku_data)
+
+        if sku_data["is_resolved"]:
+            if sku_data["resolution_type"] == "all":
+                st.success("✅ **Resolved:** All units recovered and accounted for.")
+            elif sku_data["resolution_type"] == "none":
+                st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
+            elif sku_data["resolution_type"] == "partial":
+                st.warning(
+                    f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
+                    f"{sku_data['shrink_confirmed']} confirmed as shrink."
+                )
+        else:
+            if sku_data["drift"] > 0:
+                st.warning(
+                    f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
+                    f"'{product_name}' are missing and completely unaccounted for in system telemetry."
+                )
+            elif sku_data.get("variance", 0) > 0:
+                st.warning(
+                    f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
+                    "System suspects untracked backstock routing."
+                )
+            else:
+                st.success(
+                    "✅ **Fully accounted:** Case split matches telemetry "
+                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+                )
+            if _requires_operational_control_deck(sku_data):
+                render_operational_control_deck(container_data, sku_data)
+
+
+def build_tasks(containers_dict: dict) -> list[dict]:
+    """One task dict per container SKU line for the strict execution telemetry template."""
+    tasks: list[dict] = []
+    for container_id, container in containers_dict.items():
+        for sku_data in container.get("skus", []):
+            tasks.append(
+                {
+                    "container_id": container.get("id", container_id),
+                    "status": container.get("status", ""),
+                    "zone": container.get("zone", ""),
+                    **sku_data,
+                }
+            )
+    return tasks
 
 
 def _execution_status_pill_class(status: str) -> str:
@@ -950,7 +1200,7 @@ def _count_pending_offline_scans(db_path: str | Path) -> int:
 if _DASHBOARD_ACTIVE_TAB_KEY not in st.session_state:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(DASHBOARD_TABS)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(DASHBOARD_TABS)
 
 with tab1:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
@@ -1196,7 +1446,7 @@ with tab5:
         else:
             st.warning(
                 "Unable to reach bouncer health endpoint. Ensure the FastAPI backend is running "
-                "and `API_BASE_URL` resolves (Docker: `http://backend:8000/api/v1`)."
+                "and `API_BASE_URL` resolves (Docker Compose sets this to the backend service)."
             )
 
         st.divider()
@@ -1212,6 +1462,17 @@ with tab5:
 
         st.divider()
         st.markdown("#### Live Reconciliation Log")
+        if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
+            try:
+                response = requests.delete(f"{API_BASE_URL}/bouncer/purge", timeout=5)
+                if response.status_code == 200:
+                    st.rerun()
+                else:
+                    st.error(
+                        f"Purge failed ({response.status_code}): {response.text}"
+                    )
+            except requests.exceptions.RequestException as exc:
+                st.error(f"Purge failed: {exc}")
         if reconciliations:
             render_bouncer_reconciliation_dashboard(reconciliations)
         else:
@@ -1225,203 +1486,184 @@ with tab5:
             "and throttle limits from the FastAPI middleware."
         )
 
+with tab6:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SHOPFLOOR_SCENARIOS
+    st.subheader("Shopfloor Scenarios — Manual Edge Injection")
+    st.caption(
+        "Inject retail edge scenarios into the API Bouncer reconciliation log. "
+        "Spline 3D state is prepared on each successful inject (no visual embed yet)."
+    )
+
+    scenario_choice = st.radio(
+        "Select scenario to inject",
+        [
+            "Scenario A: Shelf Damage (Torn Multipack)",
+            "Scenario B: Abandoned Promotional Flattop",
+            "Scenario C: Messy Fill (Planogram Mismatch)",
+        ],
+        key="shopfloor_scenario_choice",
+    )
+
+    if scenario_choice.startswith("Scenario A"):
+        st.markdown("#### Shelf Damage (Torn Multipack)")
+        if "scenario_a_max_capacity" not in st.session_state:
+            _default_shelf = _SHELF_PRODUCT_NAMES[0]
+            st.session_state.scenario_a_max_capacity = _shelf_sku_max_capacity(_default_shelf)
+        if "filled_qty" not in st.session_state:
+            st.session_state.filled_qty = st.session_state.scenario_a_max_capacity
+        if "damaged_qty" not in st.session_state:
+            st.session_state.damaged_qty = 0
+
+        st.selectbox(
+            "Shelf SKU",
+            _SHELF_PRODUCT_NAMES,
+            key="shopfloor_a_sku",
+            on_change=_sync_scenario_a_on_sku_change,
+        )
+        shelf_name = st.session_state.shopfloor_a_sku
+        shelf_row = _CATALOG_BY_NAME[shelf_name]
+        max_capacity = _shelf_sku_max_capacity(shelf_name)
+        st.session_state.scenario_a_max_capacity = max_capacity
+
+        fill_col, dmg_col = st.columns(2)
+        with fill_col:
+            st.number_input(
+                "Total Units Filled",
+                min_value=0,
+                max_value=max_capacity,
+                key="filled_qty",
+                on_change=_scenario_a_update_fill,
+            )
+        with dmg_col:
+            st.number_input(
+                "Damages Detected",
+                min_value=0,
+                max_value=max_capacity,
+                key="damaged_qty",
+                on_change=_scenario_a_update_damage,
+            )
+        if st.button("Inject Scenario A", key="shopfloor_inject_a"):
+            response, trx_id = inject_custom_payload(
+                ean=shelf_row["ean"],
+                product_name=shelf_name,
+                exception_type="TORN_MULTIPACK",
+                total_units=int(st.session_state.filled_qty),
+                damaged_units=int(st.session_state.damaged_qty),
+                fixture_id="CAM-AISLE-04",
+            )
+            if response.status_code == 200:
+                st.session_state.active_ean = [shelf_row["ean"]]
+                st.session_state.fixture_type = ["SHELF"]
+                st.session_state.sku_alert = 1
+                st.toast(f"✅ Injected {trx_id} — shelf damage recorded.")
+            else:
+                st.error(f"Inject failed ({response.status_code}): {response.text}")
+
+    elif scenario_choice.startswith("Scenario B"):
+        st.markdown("#### Abandoned Promotional Flattop")
+        flattop_id = st.selectbox("Flattop ID", ["FT-01", "FT-02"], key="shopfloor_b_flattop")
+        selected_names = st.multiselect(
+            "SKUs on flattop — cross-merchandising allowed (max 3)",
+            _ALL_PRODUCT_NAMES,
+            max_selections=3,
+            key="shopfloor_b_skus",
+        )
+        if st.button("Inject Scenario B", key="shopfloor_inject_b"):
+            if not selected_names:
+                st.warning("Select at least one flattop SKU.")
+            else:
+                trx_ids: list[str] = []
+                errors: list[str] = []
+                for name in selected_names:
+                    row = _CATALOG_BY_NAME[name]
+                    response, trx_id = inject_custom_payload(
+                        ean=row["ean"],
+                        product_name=name,
+                        exception_type="ABANDONED_FLATTOP",
+                        total_units=int(row["bom_units"]),
+                        damaged_units=0,
+                        fixture_id=flattop_id,
+                    )
+                    if response.status_code == 200:
+                        trx_ids.append(trx_id)
+                    else:
+                        errors.append(f"{name}: {response.status_code} {response.text}")
+                if trx_ids:
+                    st.session_state.active_ean = [_CATALOG_BY_NAME[selected_names[0]]["ean"]]
+                    st.session_state.fixture_type = [flattop_id]
+                    st.session_state.sku_alert = 1
+                    st.toast(
+                        f"✅ Injected {len(trx_ids)} flattop event(s): {', '.join(trx_ids)}"
+                    )
+                for err in errors:
+                    st.error(err)
+
+    else:
+        st.markdown("#### Messy Fill (Planogram Mismatch)")
+        actual_name = st.selectbox(
+            "Actual Item Detected",
+            _ALL_PRODUCT_NAMES,
+            key="shopfloor_c_actual",
+        )
+        expected_name = st.selectbox(
+            "Expected Item for this Slot",
+            _ALL_PRODUCT_NAMES,
+            key="shopfloor_c_expected",
+        )
+        actual_row = _CATALOG_BY_NAME[actual_name]
+        expected_row = _CATALOG_BY_NAME[expected_name]
+        case_max = int(actual_row["bom_units"])
+        lost_col, fill_col = st.columns(2)
+        with lost_col:
+            units_lost = st.number_input(
+                "Units Lost",
+                min_value=0,
+                max_value=case_max,
+                value=0,
+                key="shopfloor_c_lost",
+            )
+        with fill_col:
+            max_fill = max(0, case_max - units_lost)
+            units_filled = st.number_input(
+                "Units Filled",
+                min_value=0,
+                max_value=max_fill,
+                value=max_fill,
+                key="shopfloor_c_fill",
+            )
+        if st.button("Inject Scenario C", key="shopfloor_inject_c"):
+            response, trx_id = inject_custom_payload(
+                ean=actual_row["ean"],
+                product_name=actual_name,
+                exception_type="PLANOGRAM_MISMATCH",
+                total_units=int(units_filled),
+                damaged_units=0,
+                units_lost=int(units_lost),
+                expected_ean=expected_row["ean"],
+                fixture_id="CAM-AISLE-04",
+            )
+            if response.status_code == 200:
+                st.session_state.active_ean = [actual_row["ean"]]
+                st.session_state.fixture_type = ["SHELF"]
+                st.session_state.sku_alert = 2
+                st.toast(f"✅ Injected {trx_id} — planogram mismatch recorded.")
+            else:
+                st.error(f"Inject failed ({response.status_code}): {response.text}")
+
+    with st.expander("Spline prep state (read-only preview)"):
+        st.write(
+            {
+                "active_ean": st.session_state.get("active_ean", []),
+                "fixture_type": st.session_state.get("fixture_type", ["SHELF"]),
+                "sku_alert": st.session_state.get("sku_alert", 0),
+            }
+        )
+
 st.divider()
 
-# ---------------------------------------------------------
-# Main Content Sections
-# ---------------------------------------------------------
-def _unaccounted_variance_value(sku_data: dict) -> int:
-    if sku_data.get("is_resolved"):
-        return 0
-    return int(sku_data.get("variance", 0))
-
-
-def render_unaccounted_variance_metric(
-    sku_data: dict,
-    *,
-    delta: str | None = None,
-    delta_color: str = "normal",
-) -> None:
-    metric_kwargs = {"label": "Unaccounted Variance", "value": _unaccounted_variance_value(sku_data)}
-    if delta is not None:
-        metric_kwargs["delta"] = delta
-        metric_kwargs["delta_color"] = delta_color
-    st.metric(**metric_kwargs)
-
-
-def _sku_widget_slug(sku: str) -> str:
-    return sku.replace("-", "_").lower()
-
-
-def _operational_widget_key(action: str, container_id: str, sku: str) -> str:
-    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
-
-
-def _outstanding_units(sku_data: dict) -> int:
-    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
-
-
-def _requires_operational_control_deck(sku_data: dict) -> bool:
-    """True when the SKU still has phantom drift or unaccounted variance to resolve."""
-    if sku_data.get("is_resolved"):
-        return False
-    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
-
-
-def _container_view_from_task(task: dict) -> dict:
-    return {
-        "id": task["container_id"],
-        "status": task["status"],
-        "zone": task["zone"],
-    }
-
-
-def _sku_view_from_task(task: dict) -> dict:
-    container_fields = {"container_id", "status", "zone"}
-    return {key: value for key, value in task.items() if key not in container_fields}
-
-
-def render_operational_control_deck(container_data, sku_data) -> None:
-    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
-    if not _requires_operational_control_deck(sku_data):
-        return
-
-    container_id = container_data["id"]
-    sku = sku_data["sku"]
-    units = _outstanding_units(sku_data)
-    partial_flag = _operational_widget_key("show_partial", container_id, sku)
-
-    if partial_flag not in st.session_state:
-        st.session_state[partial_flag] = False
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    ctrl_cols = st.columns(3)
-    with ctrl_cols[0]:
-        if st.button(
-            f"All Found ({units})",
-            key=_operational_widget_key("all_found", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "all", units, partial_flag_key=partial_flag)
-
-    with ctrl_cols[1]:
-        if st.button(
-            "Not Present (0)",
-            key=_operational_widget_key("not_present", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "none", 0, partial_flag_key=partial_flag)
-
-    with ctrl_cols[2]:
-        if st.button(
-            f"Partial ({units})",
-            key=_operational_widget_key("partial", container_id, sku),
-            use_container_width=True,
-        ):
-            st.session_state[partial_flag] = not st.session_state[partial_flag]
-
-    if st.session_state.get(partial_flag, False):
-        st.warning("Partial recovery in progress — enter quantity recovered below.")
-        partial_col1, partial_col2 = st.columns([2, 1])
-        with partial_col1:
-            max_partial = max(1, units - 1) if units > 1 else 1
-            partial_qty = st.number_input(
-                "Quantity Recovered?",
-                min_value=1,
-                max_value=max_partial,
-                value=1,
-                key=_operational_widget_key("partial_qty", container_id, sku),
-            )
-        with partial_col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
-                "Confirm Partial",
-                type="primary",
-                key=_operational_widget_key("confirm_partial", container_id, sku),
-            ):
-                submit_resolution(
-                    container_id,
-                    sku,
-                    "partial",
-                    partial_qty,
-                    partial_flag_key=partial_flag,
-                )
-
-
-def build_tasks(containers_dict: dict) -> list[dict]:
-    """One task dict per container SKU line for the strict execution telemetry template."""
-    tasks: list[dict] = []
-    for container_id, container in containers_dict.items():
-        for sku_data in container.get("skus", []):
-            tasks.append(
-                {
-                    "container_id": container.get("id", container_id),
-                    "status": container.get("status", ""),
-                    "zone": container.get("zone", ""),
-                    **sku_data,
-                }
-            )
-    return tasks
-
-
-def render_execution_telemetry_card(task: dict) -> None:
-    """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
-    container_data = _container_view_from_task(task)
-    sku_data = _sku_view_from_task(task)
-    product_name = sku_data.get("name", sku_data["sku"])
-
-    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        st.subheader(f"Execution Telemetry: {container_data['id']}")
-        st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
-        render_execution_sku_profile(product_name, sku_data["sku"], sku_data.get("ean", ""))
-
-        metrics_left, metrics_right = st.columns(2)
-        with metrics_left:
-            st.metric("Expected Quantity", sku_data["expected"])
-            st.metric("Sent to Backstock", sku_data.get("backstock", 0))
-        with metrics_right:
-            st.metric("Worked to Shelf", sku_data["worked"])
-            st.metric("Phantom Drift", sku_data["drift"])
-
-        st.markdown("---")
-        render_unaccounted_variance_metric(sku_data)
-
-        if sku_data["is_resolved"]:
-            if sku_data["resolution_type"] == "all":
-                st.success("✅ **Resolved:** All units recovered and accounted for.")
-            elif sku_data["resolution_type"] == "none":
-                st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
-            elif sku_data["resolution_type"] == "partial":
-                st.warning(
-                    f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
-                    f"{sku_data['shrink_confirmed']} confirmed as shrink."
-                )
-        else:
-            if sku_data["drift"] > 0:
-                st.warning(
-                    f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-                    f"'{product_name}' are missing and completely unaccounted for in system telemetry."
-                )
-            elif sku_data.get("variance", 0) > 0:
-                st.warning(
-                    f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
-                    "System suspects untracked backstock routing."
-                )
-            else:
-                st.success(
-                    "✅ **Fully accounted:** Case split matches telemetry "
-                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
-                )
-            if _requires_operational_control_deck(sku_data):
-                render_operational_control_deck(container_data, sku_data)
-
-
 tasks = build_tasks(live_containers)
-
-# Create a 3-column grid for a more compact dashboard layout
 grid_cols = st.columns(3)
 
 for index, task in enumerate(tasks):
-    # Alternate cards across the 3 columns
     with grid_cols[index % 3]:
         render_execution_telemetry_card(task)

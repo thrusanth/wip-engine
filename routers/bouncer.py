@@ -15,6 +15,7 @@ from services.bouncer_buffer import (
     count_rejections_since,
     list_reconciliations,
     list_rejections,
+    purge_reconciliation_log,
 )
 
 router = APIRouter(prefix="/api/v1/bouncer", tags=["api-bouncer"])
@@ -51,3 +52,10 @@ def active_rejections(limit: int = 50):
 @router.get("/reconciliations")
 def reconciliation_logs(limit: int = 50):
     return list_reconciliations(limit=limit)
+
+
+@router.delete("/purge")
+def purge_reconciliation_ledger():
+    """Wipe all CV reconciliation rows from the SQLite WAL buffer."""
+    deleted = purge_reconciliation_log()
+    return {"status": "ok", "deleted": deleted}
