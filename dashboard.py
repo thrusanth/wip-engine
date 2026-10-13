@@ -187,22 +187,30 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
     tx_hook = payload.get("transaction_engine_hook")
     tx_data = "<span class='bouncer-empty-state'>No ledger action required (Synced)</span>"
     if isinstance(tx_hook, dict) and tx_hook:
+        if tx_hook.get("adjustment_summary"):
+            adj_html = html.escape(str(tx_hook["adjustment_summary"]))
+        else:
+            adj_html = (
+                f"Adj: {html.escape(str(tx_hook.get('ledger_adjustments', '')))}"
+            )
         tx_data = (
             f"<div class='bouncer-tx-data'><strong>TxType:</strong> "
             f"{html.escape(str(tx_hook.get('transaction_type', '')))}<br>"
-            f"<strong>Adj:</strong> {html.escape(str(tx_hook.get('ledger_adjustments', '')))}"
+            f"<strong>{adj_html}</strong>"
         )
         unit_price = tx_hook.get("calculated_unit_price")
+        rule = html.escape(str(tx_hook.get("compliance_rule_applied") or ""))
         if unit_price is not None:
             try:
                 price_display = html.escape(f"£{float(unit_price):.2f}")
             except (TypeError, ValueError):
                 price_display = html.escape(str(unit_price))
-            rule = html.escape(str(tx_hook.get("compliance_rule_applied") or ""))
             tx_data += (
                 f"<br><strong>Unit Price:</strong> {price_display}"
                 f"<br><strong>Rule & Math:</strong> {rule}"
             )
+        elif rule:
+            tx_data += f"<br><strong>Rule & Math:</strong> {rule}"
         tx_data += "</div>"
 
     label_data = ""

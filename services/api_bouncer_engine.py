@@ -134,6 +134,29 @@ def _apply_torn_multipack_violation(
     )
     shop_floor_action = "DISPATCH_COLLEAGUE: Remove loose units & attach markdown label."
 
+    if not ledger_data.allow_loose_resale:
+        damaged_qty = int(payload.loose_units_visible)
+        stock_key = payload.parent_sku
+        stock_adj = {stock_key: -damaged_qty}
+        writeoff_rule = (
+            "NON_COMPLIANT_FOOD_SAFETY [Action: Automatically deducted "
+            f"{damaged_qty} from stock record & routed to H&S Waste Profile. 0 yield.]"
+        )
+        transaction_payload = TransactionEnginePayload(
+            transaction_type="HEALTH_AND_SAFETY_WRITEOFF",
+            reason_code="DAMAGED_UNSEALED_FOOD_PACK",
+            ledger_adjustments=stock_adj,
+            compliance_rule_applied=writeoff_rule,
+            adjustment_summary=(
+                f"Adj: {{'{stock_key}': -{damaged_qty}}} -> DEST: H&S_WASTE_PROFILE"
+            ),
+        )
+        shop_floor_action = (
+            "DISPATCH_COLLEAGUE: Bag the damaged items. No manual scanning required "
+            "(Waste profile updated automatically)."
+        )
+        return status_code, format_alert, shop_floor_action, transaction_payload, None
+
     multipack_retail = ledger_data.retail_price
     inner_pack_size = ledger_data.pack_quantity
     proportional_unit_price = round(multipack_retail / inner_pack_size, 2)
