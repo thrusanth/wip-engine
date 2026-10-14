@@ -30,6 +30,11 @@ from mock_data import (
     RECONCILIATION_LOG_SESSION_KEY,
     USE_CACHED_TELEMETRY_KEY,
     canonical_flattop_id,
+    fleet_id_from_container_ref,
+    fleet_slot_occupied_by_queue_entry,
+    flattop_manifest_key,
+    manifest_fleet_id,
+    SCENARIO_B_FLATTOP_INJECTION_POOL,
     catalog_unit_retail_gbp,
     default_mock_flattop_backlog,
     empty_overview_metrics,
@@ -37,12 +42,13 @@ from mock_data import (
     FLATTOP_STATUS_RESOLVED_HISTORICAL,
     SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
     ensure_historical_manifest_instance_ids,
+    ensure_manifest_fleet_metadata,
     flattop_all_skus_resolved,
     flattop_is_active_on_board,
-    is_scenario_b_injection_pool_id,
     new_manifest_instance_id,
     shelf_sku_max_capacity,
     sku_code_from_queue_row,
+    standardize_flattop_queue_entry,
     sync_scenario_b_available_flattops_pool,
 )
 from utils.transmit_scenario import inject_custom_payload
@@ -88,6 +94,7 @@ def preserve_flattop_backlog_on_load() -> None:
         st.session_state.flattops = default_mock_flattop_backlog()
         return
     merge_missing_baseline_flattops()
+    ensure_manifest_fleet_metadata(st.session_state.get("flattops") or [])
     finalize_resolved_injection_flattops_for_backlog()
 
 
@@ -120,24 +127,27 @@ def clear_dashboard_master_reset_flags() -> None:
 
 
 def flattop_id_is_active(flattop_id: str) -> bool:
-    """True when a flattop id already has unresolved work on the session queue."""
-    target = canonical_flattop_id(flattop_id)
+    """True when a fleet slot is held by a live ABANDONED manifest on the queue."""
+    target = fleet_id_from_container_ref(flattop_id)
     return any(
-        canonical_flattop_id(ft) == target and flattop_is_active_on_board(ft)
+        manifest_fleet_id(ft) == target and fleet_slot_occupied_by_queue_entry(ft)
         for ft in st.session_state.flattops
     )
 
 
 def finalize_resolved_injection_flattops_for_backlog() -> None:
-    """Append a unique historical copy per completed inject; remove the live slot to release pool ids."""
+    """Archive any fully resolved fleet manifest (FT-01…FT-05) and release its slot to the inject pool."""
     queue = st.session_state.get("flattops") or []
     ensure_historical_manifest_instance_ids(queue)
     retained: list[dict] = []
     archives: list[dict] = []
     for ft in queue:
+        fleet_slot = manifest_fleet_id(ft)
+        if fleet_slot not in SCENARIO_B_FLATTOP_INJECTION_POOL:
+            retained.append(ft)
+            continue
         if (
-            is_scenario_b_injection_pool_id(ft)
-            and ft.get("status") == FLATTOP_STATUS_ABANDONED
+            ft.get("status") == FLATTOP_STATUS_ABANDONED
             and flattop_all_skus_resolved(ft)
         ):
             archived = copy.deepcopy(ft)
@@ -353,6 +363,14 @@ def register_injected_flattop_with_backend(
     return register_flattop_with_backend(ft, persist_telemetry=True)
 
 
+def _find_flattop_manifest_by_instance_id(manifest_instance_id: str) -> dict | None:
+    target = str(manifest_instance_id).strip()
+    for ft in st.session_state.get("flattops") or []:
+        if flattop_manifest_key(ft) == target:
+            return ft
+    return None
+
+
 def load_dashboard_telemetry_from_session() -> tuple[dict | None, dict | None]:
     if not st.session_state.get(USE_CACHED_TELEMETRY_KEY):
         return None, None
@@ -364,36 +382,31 @@ def load_dashboard_telemetry_from_session() -> tuple[dict | None, dict | None]:
 
 
 def apply_all_found_to_flattop_queue(
-    container_id: str,
     sku: str,
     recovered_units: int,
     *,
+    manifest_instance_id: str,
     outstanding_before: int = 0,
 ) -> None:
-    """Zero session queue phantom drift after All Found so dynamic KPIs drop immediately."""
+    """Zero session queue phantom drift after All Found (target manifest by instance id)."""
     recovered = max(0, int(recovered_units))
     if recovered <= 0:
         recovered = max(0, int(outstanding_before))
     target_sku = str(sku)
-    target_container = canonical_flattop_id(container_id)
-    for ft in st.session_state.flattops:
-        if canonical_flattop_id(ft) != target_container:
+    ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
+    if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return
+    for row in ft.get("skus") or []:
+        if sku_code_from_queue_row(row) != target_sku:
             continue
-        if ft.get("status") != "ABANDONED_MID_SHIFT":
-            continue
-        for row in ft.get("skus") or []:
-            if sku_code_from_queue_row(row) != target_sku:
-                continue
-            if recovered <= 0:
-                recovered = int(
-                    row.get("phantom_drift", row.get("bom_units", 0))
-                )
-            row["phantom_drift"] = 0
-            row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
-            row["is_resolved"] = True
-            row["resolved"] = True
-            row["resolution_type"] = "all"
-            return
+        if recovered <= 0:
+            recovered = int(row.get("phantom_drift", row.get("bom_units", 0)))
+        row["phantom_drift"] = 0
+        row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
+        row["is_resolved"] = True
+        row["resolved"] = True
+        row["resolution_type"] = "all"
+        return
 
 
 def _accumulate_session_shrink_cost_for_row(row: dict, shrink_units: int) -> None:
@@ -416,58 +429,52 @@ def _accumulate_session_shrink_cost_for_row(row: dict, shrink_units: int) -> Non
 
 
 def apply_not_found_to_flattop_queue(
-    container_id: str,
     sku: str,
     *,
+    manifest_instance_id: str,
     outstanding_before: int = 0,
 ) -> None:
-    """Confirm shrink (Not Present) on the live manifest only (historical rows are never mutated)."""
+    """Confirm shrink (Not Present) on the targeted live manifest only."""
     target_sku = str(sku)
-    target_container = canonical_flattop_id(container_id)
-    for ft in st.session_state.flattops:
-        if canonical_flattop_id(ft) != target_container:
+    ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
+    if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return
+    for row in ft.get("skus") or []:
+        if sku_code_from_queue_row(row) != target_sku:
             continue
-        if ft.get("status") != FLATTOP_STATUS_ABANDONED:
-            continue
-        for row in ft.get("skus") or []:
-            if sku_code_from_queue_row(row) != target_sku:
-                continue
-            outstanding = max(0, int(outstanding_before))
-            if outstanding <= 0:
-                outstanding = int(
-                    row.get("phantom_drift", row.get("bom_units", 0))
-                )
-            row["finalized_shrink_units"] = outstanding
-            row["shrink_confirmed"] = outstanding
-            row["phantom_drift"] = 0
-            row["recovered_units"] = 0
-            row["is_resolved"] = True
-            row["resolved"] = True
-            row["resolution_type"] = "none"
-            _accumulate_session_shrink_cost_for_row(row, outstanding)
-            return
+        outstanding = max(0, int(outstanding_before))
+        if outstanding <= 0:
+            outstanding = int(row.get("phantom_drift", row.get("bom_units", 0)))
+        row["finalized_shrink_units"] = outstanding
+        row["shrink_confirmed"] = outstanding
+        row["phantom_drift"] = 0
+        row["recovered_units"] = 0
+        row["is_resolved"] = True
+        row["resolved"] = True
+        row["resolution_type"] = "none"
+        _accumulate_session_shrink_cost_for_row(row, outstanding)
+        return
 
 
-def _flattop_all_skus_resolved_in_queue(container_id: str) -> bool:
-    target_container = canonical_flattop_id(container_id)
-    for ft in st.session_state.flattops:
-        if canonical_flattop_id(ft) != target_container:
-            continue
-        if ft.get("status") != FLATTOP_STATUS_ABANDONED:
-            continue
-        return flattop_all_skus_resolved(ft)
-    return False
+def _flattop_all_skus_resolved_in_queue(manifest_instance_id: str) -> bool:
+    ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
+    if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return False
+    return flattop_all_skus_resolved(ft)
 
 
-def maybe_decrement_pending_edge_tasks(container_id: str, response_payload: dict) -> None:
+def maybe_decrement_pending_edge_tasks(
+    manifest_instance_id: str, response_payload: dict
+) -> None:
     """Drop pending task count when every SKU on the flattop is resolved."""
-    fleet_id = canonical_flattop_id(container_id)
+    ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
+    fleet_id = manifest_fleet_id(ft) if ft else fleet_id_from_container_ref(manifest_instance_id)
     container = (response_payload.get("containers") or {}).get(fleet_id) or {}
     backend_skus = container.get("skus") or []
     backend_cleared = bool(backend_skus) and all(
         row.get("is_resolved") for row in backend_skus
     )
-    if backend_cleared or _flattop_all_skus_resolved_in_queue(container_id):
+    if backend_cleared or _flattop_all_skus_resolved_in_queue(manifest_instance_id):
         st.session_state[KPI_SESSION_PENDING_EDGE_TASKS] = max(
             0,
             int(st.session_state.get(KPI_SESSION_PENDING_EDGE_TASKS, 0)) - 1,
@@ -475,40 +482,35 @@ def maybe_decrement_pending_edge_tasks(container_id: str, response_payload: dict
 
 
 def apply_partial_to_flattop_queue(
-    container_id: str,
     sku: str,
     recovered_units: int,
     *,
+    manifest_instance_id: str,
     outstanding_before: int = 0,
 ) -> None:
-    """Finalize partial recovery: backstock recovered units, drift = unrecovered remainder."""
+    """Finalize partial recovery on the targeted manifest (instance id)."""
     recovered = max(0, int(recovered_units))
     outstanding = max(0, int(outstanding_before))
     target_sku = str(sku)
-    target_container = canonical_flattop_id(container_id)
-    for ft in st.session_state.flattops:
-        if canonical_flattop_id(ft) != target_container:
+    ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
+    if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return
+    for row in ft.get("skus") or []:
+        if sku_code_from_queue_row(row) != target_sku:
             continue
-        if ft.get("status") != "ABANDONED_MID_SHIFT":
-            continue
-        for row in ft.get("skus") or []:
-            if sku_code_from_queue_row(row) != target_sku:
-                continue
-            if outstanding <= 0:
-                outstanding = int(
-                    row.get("phantom_drift", row.get("bom_units", 0))
-                )
-            recovered = min(recovered, outstanding)
-            remainder = max(0, outstanding - recovered)
-            row["phantom_drift"] = remainder
-            row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
-            row["recovered_units"] = recovered
-            row["shrink_confirmed"] = remainder
-            row["is_resolved"] = True
-            row["resolved"] = True
-            row["resolution_type"] = "partial"
-            row["status"] = "Partial Shrink Confirmed"
-            return
+        if outstanding <= 0:
+            outstanding = int(row.get("phantom_drift", row.get("bom_units", 0)))
+        recovered = min(recovered, outstanding)
+        remainder = max(0, outstanding - recovered)
+        row["phantom_drift"] = remainder
+        row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
+        row["recovered_units"] = recovered
+        row["shrink_confirmed"] = remainder
+        row["is_resolved"] = True
+        row["resolved"] = True
+        row["resolution_type"] = "partial"
+        row["status"] = "Partial Shrink Confirmed"
+        return
 
 
 def catalog_rows_to_flattop_queue_skus(catalog_rows: list[dict]) -> list[dict]:
@@ -534,31 +536,38 @@ def append_abandoned_flattop_to_session_queue(
     """Append or replace an active flattop manifest after API Bouncer Scenario B ingest."""
     clear_dashboard_master_reset_flags()
     fleet_id = canonical_flattop_id(flattop_id)
-    entry = {
-        "flattop_id": fleet_id,
-        "status": FLATTOP_STATUS_ABANDONED,
-        "skus": copy.deepcopy(queue_skus),
-        "trx_ids": list(trx_ids),
-    }
+    entry = standardize_flattop_queue_entry(
+        {
+            "flattop_id": fleet_id,
+            "status": FLATTOP_STATUS_ABANDONED,
+            "skus": queue_skus,
+            "trx_ids": list(trx_ids),
+        }
+    )
     flattops = st.session_state.flattops
     for index, ft in enumerate(flattops):
-        if canonical_flattop_id(ft) == fleet_id and flattop_is_active_on_board(ft):
+        if (
+            manifest_fleet_id(ft) == fleet_id
+            and fleet_slot_occupied_by_queue_entry(ft)
+        ):
             flattops[index] = entry
             return
     flattops.insert(0, entry)
 
 
 def submit_resolution(
-    container_id,
+    fleet_id,
     sku,
     resolution_type,
     recovered_units=0,
     *,
+    manifest_instance_id: str,
     outstanding_before: int = 0,
     partial_flag_key: str | None = None,
 ):
     """Submits a resolution event to the FastAPI backend."""
-    fleet_container_id = canonical_flattop_id(container_id)
+    fleet_container_id = fleet_id_from_container_ref(fleet_id)
+    manifest_key = str(manifest_instance_id).strip()
     payload = {
         "container_id": fleet_container_id,
         "sku": sku,
@@ -578,32 +587,34 @@ def submit_resolution(
         resolution_payload = response.json()
         if resolution_type == "all":
             apply_all_found_to_flattop_queue(
-                fleet_container_id,
                 sku,
                 recovered_units,
+                manifest_instance_id=manifest_key,
                 outstanding_before=outstanding_before,
             )
         elif resolution_type == "partial":
             apply_partial_to_flattop_queue(
-                fleet_container_id,
                 sku,
                 recovered_units,
+                manifest_instance_id=manifest_key,
                 outstanding_before=outstanding_before,
             )
         elif resolution_type == "none":
             apply_not_found_to_flattop_queue(
-                fleet_container_id,
                 sku,
+                manifest_instance_id=manifest_key,
                 outstanding_before=outstanding_before,
             )
         finalize_resolved_injection_flattops_for_backlog()
-        maybe_decrement_pending_edge_tasks(fleet_container_id, resolution_payload)
+        maybe_decrement_pending_edge_tasks(manifest_key, resolution_payload)
         persist_dashboard_telemetry(resolution_payload)
         if partial_flag_key is not None:
             st.session_state[partial_flag_key] = False
         st.rerun()
     except requests.exceptions.Timeout:
-        st.warning(f"Backend API timed out while submitting resolution for container {container_id}.")
+        st.warning(
+            f"Backend API timed out while submitting resolution for {manifest_key}."
+        )
         st.stop()
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to submit resolution due to connection error: {e}")

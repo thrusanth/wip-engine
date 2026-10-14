@@ -81,8 +81,41 @@ def canonical_flattop_id(raw_id: str | dict) -> str:
     return str(slot).strip().upper()
 
 
-# Idle fleet slots injectable via Scenario B (FT-02 is baseline backlog only — use FT-05).
-SCENARIO_B_FLATTOP_INJECTION_POOL: list[str] = ["FT-01", "FT-05"]
+def manifest_fleet_id(ft: dict) -> str:
+    """Base fleet slot (FT-0X) from queue manifest metadata — not the instance suffix."""
+    explicit = ft.get("fleet_id") or ft.get("flattop_id")
+    if explicit:
+        return str(explicit).strip().upper().split("#", 1)[0].strip()
+    return fleet_id_from_container_ref(ft)
+
+
+def fleet_slot_occupied_by_queue_entry(ft: dict) -> bool:
+    """True while a live ABANDONED manifest still holds the fleet slot on the board."""
+    if ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        return False
+    if ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return False
+    return bool(ft.get("skus"))
+
+
+def fleet_id_from_container_ref(raw_id: str | dict) -> str:
+    """Base fleet id for WipEngine API (strip manifest instance suffix after '#')."""
+    if isinstance(raw_id, dict):
+        explicit = raw_id.get("fleet_id") or raw_id.get("flattop_id")
+        if explicit:
+            text = str(explicit).strip().upper()
+            return text.split("#", 1)[0].strip()
+        slot = raw_id.get("id") or raw_id.get("manifest_instance_id") or ""
+    else:
+        slot = raw_id
+    text = str(slot).strip().upper()
+    if "#" in text:
+        return text.split("#", 1)[0].strip()
+    return text
+
+
+# Full fleet injectable via Scenario B when no live manifest holds the slot.
+SCENARIO_B_FLATTOP_INJECTION_POOL: list[str] = list(FLATTOP_FLEET_IDS)
 
 FLATTOP_STATUS_ABANDONED = "ABANDONED_MID_SHIFT"
 FLATTOP_STATUS_RESOLVED_HISTORICAL = "RESOLVED_HISTORICAL"
@@ -139,6 +172,14 @@ def compact_instance_id_for_display(manifest_instance_id: str) -> str:
     return suffix[:12] if len(suffix) > 12 else suffix
 
 
+def ensure_manifest_fleet_metadata(flattops: list[dict]) -> None:
+    """Backfill explicit fleet_id / flattop_id on queue rows (never the instance suffix)."""
+    for ft in flattops:
+        fleet = manifest_fleet_id(ft)
+        ft["fleet_id"] = fleet
+        ft["flattop_id"] = fleet
+
+
 def ensure_historical_manifest_instance_ids(flattops: list[dict]) -> None:
     """Backfill instance ids on legacy RESOLVED_HISTORICAL rows (in-place)."""
     for ft in flattops:
@@ -179,15 +220,22 @@ def flattop_is_displayable_in_ui(ft: dict) -> bool:
 
 
 def is_scenario_b_injection_pool_id(flattop_id: str | dict) -> bool:
-    return canonical_flattop_id(flattop_id) in SCENARIO_B_FLATTOP_INJECTION_POOL
+    return fleet_id_from_container_ref(flattop_id) in SCENARIO_B_FLATTOP_INJECTION_POOL
+
+
+def active_fleet_ids_with_live_manifests(flattops: list[dict] | None = None) -> set[str]:
+    """Fleet slots currently held by live ABANDONED manifests (not RESOLVED_HISTORICAL)."""
+    queue = flattops or []
+    return {
+        manifest_fleet_id(ft)
+        for ft in queue
+        if fleet_slot_occupied_by_queue_entry(ft)
+    }
 
 
 def available_flattops_for_scenario_b(flattops: list[dict] | None = None) -> list[str]:
-    """Flattop IDs eligible for Scenario B inject — pool minus manifests actively on the board."""
-    queue = flattops or []
-    active_ids = {
-        canonical_flattop_id(ft) for ft in queue if flattop_is_active_on_board(ft)
-    }
+    """Fleet ids eligible for Scenario B — full pool minus any slot with a live manifest."""
+    active_ids = active_fleet_ids_with_live_manifests(flattops)
     return [
         ft_id for ft_id in SCENARIO_B_FLATTOP_INJECTION_POOL if ft_id not in active_ids
     ]
@@ -205,10 +253,32 @@ OFFLINE_CASE_EXPECTED_UNITS = {
     "RICE-CASE-6": 6,
 }
 
+# Baseline SKU telemetry splits (aligned with WipEngine mock containers).
+_BASELINE_SKU_SPLITS: dict[str, dict[str, int]] = {
+    "BAKED-BEANS-6PK": {
+        "expected_qty": 12,
+        "worked_to_shelf": 6,
+        "sent_to_backstock": 2,
+        "phantom_drift": 4,
+    },
+    "ORANGE-SODA-8PK": {
+        "expected_qty": 8,
+        "worked_to_shelf": 6,
+        "sent_to_backstock": 0,
+        "phantom_drift": 2,
+    },
+    "LAGER-4PK": {
+        "expected_qty": 6,
+        "worked_to_shelf": 3,
+        "sent_to_backstock": 0,
+        "phantom_drift": 3,
+    },
+}
+
 MOCK_FLATTOP_BACKLOG: list[dict] = [
     {
         "flattop_id": "FT-02",
-        "status": "ABANDONED_MID_SHIFT",
+        "status": FLATTOP_STATUS_ABANDONED,
         "skus": [
             {
                 "sku": "BAKED-BEANS-6PK",
@@ -221,7 +291,7 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-03",
-        "status": "ABANDONED_MID_SHIFT",
+        "status": FLATTOP_STATUS_ABANDONED,
         "skus": [
             {
                 "sku": "ORANGE-SODA-8PK",
@@ -234,7 +304,7 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-04",
-        "status": "ABANDONED_MID_SHIFT",
+        "status": FLATTOP_STATUS_ABANDONED,
         "skus": [
             {
                 "sku": "LAGER-4PK",
@@ -257,9 +327,56 @@ CATALOG_BY_EAN = {row["ean"]: row["product_name"] for row in MASTER_CATALOG}
 CATALOG_ROW_BY_EAN = {row["ean"]: row for row in MASTER_CATALOG}
 
 
+def standardize_flattop_sku_row(row: dict) -> dict:
+    """One queue SKU line — same keys as Scenario B `catalog_rows_to_flattop_queue_skus` output."""
+    sku = copy.deepcopy(row)
+    catalog = CATALOG_ROW_BY_EAN.get(str(sku.get("ean") or "").strip(), {})
+    sku_code = str(sku.get("sku") or sku_code_from_queue_row({**sku, **catalog}))
+    sku["sku"] = sku_code
+    bom = int(sku.get("bom_units", catalog.get("bom_units", 0)))
+    sku["bom_units"] = bom
+    sku["expected_qty"] = int(sku.get("expected_qty", bom))
+    sku["product_name"] = str(
+        sku.get("product_name") or catalog.get("product_name") or sku_code
+    )
+    for key, value in catalog.items():
+        sku.setdefault(key, value)
+    for key, value in _BASELINE_SKU_SPLITS.get(sku_code, {}).items():
+        sku.setdefault(key, value)
+    if "phantom_drift" not in sku:
+        sku["phantom_drift"] = bom
+    if "price" not in sku and sku.get("unit_price_pence") is not None:
+        sku["price"] = catalog_unit_retail_gbp(sku)
+    sku.setdefault("is_resolved", False)
+    sku.setdefault("resolved", False)
+    return sku
+
+
+def standardize_flattop_queue_entry(
+    entry: dict,
+    *,
+    assign_manifest_instance_id: bool = True,
+    trx_ids: list[str] | None = None,
+) -> dict:
+    """Flattop manifest — universal shape for baseline FT-02/03/04 and Scenario B injects."""
+    ft = copy.deepcopy(entry)
+    fleet_id = fleet_id_from_container_ref(ft)
+    ft["fleet_id"] = fleet_id
+    ft["flattop_id"] = fleet_id
+    ft["status"] = ft.get("status") or FLATTOP_STATUS_ABANDONED
+    ft["trx_ids"] = list(trx_ids if trx_ids is not None else ft.get("trx_ids") or [])
+    if assign_manifest_instance_id and not ft.get("manifest_instance_id"):
+        ft["manifest_instance_id"] = new_manifest_instance_id(fleet_id)
+    ft["skus"] = [standardize_flattop_sku_row(row) for row in (ft.get("skus") or [])]
+    return ft
+
+
 def default_mock_flattop_backlog() -> list[dict]:
-    """Immutable baseline queue — FT-02, FT-03, FT-04 (matches WipEngine mock containers)."""
-    return copy.deepcopy(MOCK_FLATTOP_BACKLOG)
+    """Baseline queue FT-02, FT-03, FT-04 — standardized manifests (matches Scenario B shape)."""
+    return [
+        standardize_flattop_queue_entry(entry)
+        for entry in copy.deepcopy(MOCK_FLATTOP_BACKLOG)
+    ]
 
 
 def baseline_flattop_ids() -> frozenset[str]:

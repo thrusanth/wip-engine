@@ -39,12 +39,12 @@ from mock_data import (
     TOTAL_POWER_CUT_STATUS,
     baseline_flattop_ids,
     canonical_flattop_id,
+    fleet_id_from_container_ref,
     catalog_unit_retail_gbp,
     empty_overview_metrics,
     flattop_is_active_on_board,
     flattop_is_displayable_in_ui,
     init_session_state_defaults,
-    is_scenario_b_injection_pool_id,
     shelf_sku_max_capacity,
     sku_code_from_queue_row,
     sync_scenario_b_available_flattops_pool,
@@ -545,8 +545,8 @@ def _build_flattop_cards_from_queue(
                         "sku": sku_code,
                         "name": row["product_name"],
                         "ean": ean_single,
-                        "expected": bom,
-                        "worked": 0,
+                        "expected": int(row.get("expected_qty", bom)),
+                        "worked": int(row.get("worked_to_shelf", row.get("worked", 0))),
                         "drift": drift,
                         "backstock": int(row.get("sent_to_backstock", 0)),
                         "variance": drift,
@@ -1046,13 +1046,14 @@ def render_operational_control_deck(
     if not _requires_operational_control_deck(sku_data):
         return
 
-    container_id = md.canonical_flattop_id(container_data["id"])
+    manifest_key = str(container_data["id"])
+    fleet_id = fleet_id_from_container_ref(container_data)
     sku = sku_data["sku"]
     ean = str(sku_data.get("ean") or "")
     units = _outstanding_units(sku_data)
     key_kwargs = {"ean": ean, "widget_index": widget_index}
     partial_flag = _operational_widget_key(
-        "show_partial", container_id, sku, **key_kwargs
+        "show_partial", manifest_key, sku, **key_kwargs
     )
 
     if partial_flag not in st.session_state:
@@ -1063,14 +1064,15 @@ def render_operational_control_deck(
     with ctrl_cols[0]:
         if st.button(
             f"All Found ({units})",
-            key=_operational_widget_key("all_found", container_id, sku, **key_kwargs),
+            key=_operational_widget_key("all_found", manifest_key, sku, **key_kwargs),
             use_container_width=True,
         ):
             submit_resolution(
-                container_id,
+                fleet_id,
                 sku,
                 "all",
                 units,
+                manifest_instance_id=manifest_key,
                 outstanding_before=units,
                 partial_flag_key=partial_flag,
             )
@@ -1078,14 +1080,15 @@ def render_operational_control_deck(
     with ctrl_cols[1]:
         if st.button(
             "Not Present (0)",
-            key=_operational_widget_key("not_present", container_id, sku, **key_kwargs),
+            key=_operational_widget_key("not_present", manifest_key, sku, **key_kwargs),
             use_container_width=True,
         ):
             submit_resolution(
-                container_id,
+                fleet_id,
                 sku,
                 "none",
                 0,
+                manifest_instance_id=manifest_key,
                 outstanding_before=units,
                 partial_flag_key=partial_flag,
             )
@@ -1093,7 +1096,7 @@ def render_operational_control_deck(
     with ctrl_cols[2]:
         if st.button(
             f"Partial ({units})",
-            key=_operational_widget_key("partial", container_id, sku, **key_kwargs),
+            key=_operational_widget_key("partial", manifest_key, sku, **key_kwargs),
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
@@ -1109,7 +1112,7 @@ def render_operational_control_deck(
                 max_value=max_partial,
                 value=1,
                 key=_operational_widget_key(
-                    "partial_qty", container_id, sku, **key_kwargs
+                    "partial_qty", manifest_key, sku, **key_kwargs
                 ),
             )
         with partial_col2:
@@ -1118,14 +1121,15 @@ def render_operational_control_deck(
                 "Confirm Partial",
                 type="primary",
                 key=_operational_widget_key(
-                    "confirm_partial", container_id, sku, **key_kwargs
+                    "confirm_partial", manifest_key, sku, **key_kwargs
                 ),
             ):
                 submit_resolution(
-                    container_id,
+                    fleet_id,
                     sku,
                     "partial",
                     partial_qty,
+                    manifest_instance_id=manifest_key,
                     outstanding_before=units,
                     partial_flag_key=partial_flag,
                 )
@@ -1206,8 +1210,8 @@ def _partition_flattop_cards_for_overview(
         )
         if (
             ft is not None
-            and is_scenario_b_injection_pool_id(fleet_id)
             and flattop_is_active_on_board(ft)
+            and fleet_id not in _baseline_flattop_ids()
         ):
             injected.append(card)
         else:
@@ -1215,11 +1219,25 @@ def _partition_flattop_cards_for_overview(
     return injected, baseline
 
 
+def _flattop_card_fleet_sort_key(card: dict) -> tuple[str, str]:
+    """Ascending FT-0x layout; tie-break by manifest instance for multiple historical rows."""
+    fleet = fleet_id_from_container_ref(
+        card.get("container_id") or card.get("manifest_instance_id") or ""
+    )
+    manifest = str(card.get("manifest_instance_id") or "")
+    return (fleet, manifest)
+
+
+def _sort_flattop_cards_by_fleet_id(cards: list[dict]) -> list[dict]:
+    return sorted(cards, key=_flattop_card_fleet_sort_key)
+
+
 def _render_flattop_card_grid(
     cards: list[dict], *, card_index_offset: int = 0
 ) -> None:
     if not cards:
         return
+    cards = _sort_flattop_cards_by_fleet_id(cards)
     grid = st.columns(3)
     for index, flattop_card in enumerate(cards):
         with grid[index % 3]:
@@ -2007,13 +2025,15 @@ with tab6:
 
     elif scenario_choice.startswith("Scenario B"):
         st.markdown("#### Abandoned Flattop")
-        # Injection pool: idle FT-01 / FT-05 (baseline FT-02/03/04 excluded from pool).
+        # Injection pool: idle slots from FT-01 … FT-05 (released when manifests go RESOLVED_HISTORICAL).
         # Duplicate-active guard lives in handle_scenario_b_injection — retain for future inline SKU adds.
         scenario_b_flattop_options = sync_scenario_b_available_flattops_pool(
             st.session_state.get("flattops", [])
         )
         if not scenario_b_flattop_options:
-            st.info("No idle flattops available for injection (FT-01 and FT-05 are already on the queue).")
+            st.info(
+                "No idle flattops available for injection (FT-01 through FT-05 are all live on the queue)."
+            )
         flattop_id = st.selectbox(
             "Flattop ID",
             scenario_b_flattop_options or ["FT-01"],
