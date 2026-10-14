@@ -44,6 +44,8 @@ from mock_data import (
     ensure_historical_manifest_instance_ids,
     ensure_manifest_fleet_metadata,
     flattop_all_skus_resolved,
+    initialize_live_flattop_sku_telemetry,
+    flattop_sku_unaccounted_variance,
     flattop_is_active_on_board,
     new_manifest_instance_id,
     shelf_sku_max_capacity,
@@ -55,7 +57,7 @@ from utils.transmit_scenario import inject_custom_payload
 
 
 def baseline_flattop_queue_for_purge() -> list[dict]:
-    """Baseline FT-02/03/04 with zeroed drift so KPI loops stay at 0 after purge."""
+    """Baseline historical FT-02/03/04 with zeroed drift so KPI loops stay at 0 after purge."""
     backlog = default_mock_flattop_backlog()
     for ft in backlog:
         for row in ft.get("skus") or []:
@@ -89,6 +91,7 @@ def preserve_flattop_backlog_on_load() -> None:
     if "_flattop_backlog_seeded" not in st.session_state:
         st.session_state._flattop_backlog_seeded = True
         st.session_state.flattops = default_mock_flattop_backlog()
+        sync_scenario_b_available_flattops_pool(st.session_state.flattops)
         return
     if not isinstance(st.session_state.get("flattops"), list):
         st.session_state.flattops = default_mock_flattop_backlog()
@@ -388,10 +391,7 @@ def apply_all_found_to_flattop_queue(
     manifest_instance_id: str,
     outstanding_before: int = 0,
 ) -> None:
-    """Zero session queue phantom drift after All Found (target manifest by instance id)."""
-    recovered = max(0, int(recovered_units))
-    if recovered <= 0:
-        recovered = max(0, int(outstanding_before))
+    """Route all unaccounted variance to backstock; confirmed shrink (phantom drift) stays 0."""
     target_sku = str(sku)
     ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
     if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
@@ -399,10 +399,12 @@ def apply_all_found_to_flattop_queue(
     for row in ft.get("skus") or []:
         if sku_code_from_queue_row(row) != target_sku:
             continue
-        if recovered <= 0:
-            recovered = int(row.get("phantom_drift", row.get("bom_units", 0)))
+        unaccounted = flattop_sku_unaccounted_variance(row)
+        if unaccounted <= 0 and int(outstanding_before) > 0:
+            unaccounted = int(outstanding_before)
+        row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + unaccounted
+        row["unaccounted_variance"] = 0
         row["phantom_drift"] = 0
-        row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
         row["is_resolved"] = True
         row["resolved"] = True
         row["resolution_type"] = "all"
@@ -442,17 +444,18 @@ def apply_not_found_to_flattop_queue(
     for row in ft.get("skus") or []:
         if sku_code_from_queue_row(row) != target_sku:
             continue
-        outstanding = max(0, int(outstanding_before))
-        if outstanding <= 0:
-            outstanding = int(row.get("phantom_drift", row.get("bom_units", 0)))
-        row["finalized_shrink_units"] = outstanding
-        row["shrink_confirmed"] = outstanding
-        row["phantom_drift"] = 0
+        unaccounted = flattop_sku_unaccounted_variance(row)
+        if unaccounted <= 0 and int(outstanding_before) > 0:
+            unaccounted = int(outstanding_before)
+        row["phantom_drift"] = unaccounted
+        row["unaccounted_variance"] = 0
+        row["finalized_shrink_units"] = unaccounted
+        row["shrink_confirmed"] = unaccounted
         row["recovered_units"] = 0
         row["is_resolved"] = True
         row["resolved"] = True
         row["resolution_type"] = "none"
-        _accumulate_session_shrink_cost_for_row(row, outstanding)
+        _accumulate_session_shrink_cost_for_row(row, unaccounted)
         return
 
 
@@ -490,7 +493,6 @@ def apply_partial_to_flattop_queue(
 ) -> None:
     """Finalize partial recovery on the targeted manifest (instance id)."""
     recovered = max(0, int(recovered_units))
-    outstanding = max(0, int(outstanding_before))
     target_sku = str(sku)
     ft = _find_flattop_manifest_by_instance_id(manifest_instance_id)
     if not ft or ft.get("status") != FLATTOP_STATUS_ABANDONED:
@@ -498,12 +500,14 @@ def apply_partial_to_flattop_queue(
     for row in ft.get("skus") or []:
         if sku_code_from_queue_row(row) != target_sku:
             continue
-        if outstanding <= 0:
-            outstanding = int(row.get("phantom_drift", row.get("bom_units", 0)))
-        recovered = min(recovered, outstanding)
-        remainder = max(0, outstanding - recovered)
-        row["phantom_drift"] = remainder
+        unaccounted = flattop_sku_unaccounted_variance(row)
+        if unaccounted <= 0 and int(outstanding_before) > 0:
+            unaccounted = int(outstanding_before)
+        recovered = min(recovered, unaccounted)
+        remainder = max(0, unaccounted - recovered)
         row["sent_to_backstock"] = int(row.get("sent_to_backstock", 0)) + recovered
+        row["phantom_drift"] = remainder
+        row["unaccounted_variance"] = 0
         row["recovered_units"] = recovered
         row["shrink_confirmed"] = remainder
         row["is_resolved"] = True
@@ -514,17 +518,19 @@ def apply_partial_to_flattop_queue(
 
 
 def catalog_rows_to_flattop_queue_skus(catalog_rows: list[dict]) -> list[dict]:
-    """Bouncer / Scenario B queue rows with explicit phantom drift and unit price."""
+    """Bouncer / Scenario B queue rows — unaccounted variance is the initial gap; phantom drift starts at 0."""
     queue_skus: list[dict] = []
     for row in catalog_rows:
         bom = int(row["bom_units"])
-        queue_skus.append(
-            {
-                **row,
-                "phantom_drift": bom,
-                "price": catalog_unit_retail_gbp(row),
-            }
-        )
+        sku_row = {
+            **row,
+            "expected_qty": bom,
+            "worked_to_shelf": int(row.get("worked_to_shelf", 0)),
+            "sent_to_backstock": int(row.get("sent_to_backstock", 0)),
+            "price": catalog_unit_retail_gbp(row),
+        }
+        initialize_live_flattop_sku_telemetry(sku_row)
+        queue_skus.append(sku_row)
     return queue_skus
 
 

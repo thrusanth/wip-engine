@@ -37,19 +37,20 @@ from mock_data import (
     TAB_SYSTEM_OVERVIEW,
     TAB_TELEMETRY,
     TOTAL_POWER_CUT_STATUS,
-    baseline_flattop_ids,
     canonical_flattop_id,
     fleet_id_from_container_ref,
+    fleet_slot_occupied_by_queue_entry,
     catalog_unit_retail_gbp,
     empty_overview_metrics,
-    flattop_is_active_on_board,
     flattop_is_displayable_in_ui,
     init_session_state_defaults,
     shelf_sku_max_capacity,
     sku_code_from_queue_row,
     sync_scenario_b_available_flattops_pool,
     FLATTOP_UI_DISPLAY_STATUSES,
+    kpi_detected_phantom_drift_units_for_row,
     kpi_shrink_units_for_row,
+    flattop_sku_unaccounted_variance,
     flattop_manifest_key,
     compact_instance_id_for_display,
     SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
@@ -97,7 +98,6 @@ _ALL_PRODUCT_NAMES = ALL_PRODUCT_NAMES
 _CATALOG_BY_EAN = CATALOG_BY_EAN
 _CATALOG_ROW_BY_EAN = CATALOG_ROW_BY_EAN
 _catalog_unit_retail_gbp = catalog_unit_retail_gbp
-_baseline_flattop_ids = baseline_flattop_ids
 _empty_overview_metrics = empty_overview_metrics
 _sku_code_from_queue_row = sku_code_from_queue_row
 _shelf_sku_max_capacity = shelf_sku_max_capacity
@@ -496,13 +496,17 @@ def _build_flattop_cards_from_queue(
             backend = backend_skus.get(sku_code)
             queue_resolved = bool(row.get("is_resolved") or row.get("resolved"))
             if backend:
-                drift = int(backend.get("drift", 0))
-                if drift <= 0:
-                    drift = _phantom_drift_for_queue_sku(row, backend)
                 is_resolved = bool(backend.get("is_resolved", False)) or queue_resolved
                 resolution_type = backend.get("resolution_type") or row.get(
                     "resolution_type"
                 )
+                if is_resolved:
+                    drift = 0 if resolution_type == "all" else max(
+                        0, int(row.get("phantom_drift", backend.get("shrink_confirmed", 0)))
+                    )
+                else:
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                unaccounted = 0 if is_resolved else flattop_sku_unaccounted_variance(row)
                 ean_single = _coerce_single_ean_string(
                     backend.get("ean") or row.get("ean", "")
                 )
@@ -517,7 +521,7 @@ def _build_flattop_cards_from_queue(
                         "backstock": int(
                             backend.get("backstock", row.get("sent_to_backstock", 0))
                         ),
-                        "variance": int(backend.get("variance", drift)),
+                        "unaccounted_variance": unaccounted,
                         "is_resolved": is_resolved,
                         "resolution_type": resolution_type,
                         "recovered_units": int(
@@ -533,12 +537,17 @@ def _build_flattop_cards_from_queue(
                 finalized = int(
                     row.get("finalized_shrink_units", shrink_confirmed)
                 )
-                if queue_resolved and row.get("resolution_type") == "none":
-                    drift = finalized
-                elif queue_resolved and row.get("resolution_type") == "partial":
-                    drift = shrink_confirmed
+                if queue_resolved:
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                    if drift <= 0 and row.get("resolution_type") == "none":
+                        drift = finalized
+                    elif drift <= 0 and row.get("resolution_type") == "partial":
+                        drift = shrink_confirmed
                 else:
-                    drift = _phantom_drift_for_queue_sku(row, None)
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                unaccounted = (
+                    0 if queue_resolved else flattop_sku_unaccounted_variance(row)
+                )
                 ean_single = _coerce_single_ean_string(row.get("ean", ""))
                 sku_lines.append(
                     {
@@ -549,7 +558,7 @@ def _build_flattop_cards_from_queue(
                         "worked": int(row.get("worked_to_shelf", row.get("worked", 0))),
                         "drift": drift,
                         "backstock": int(row.get("sent_to_backstock", 0)),
-                        "variance": drift,
+                        "unaccounted_variance": unaccounted,
                         "is_resolved": queue_resolved,
                         "resolution_type": row.get("resolution_type"),
                         "recovered_units": int(row.get("recovered_units", 0)),
@@ -584,14 +593,6 @@ def _shrink_unit_price_gbp(queue_row: dict, backend: dict | None) -> float:
     return _DEFAULT_SHRINK_UNIT_PRICE_GBP
 
 
-def _phantom_drift_for_queue_sku(queue_row: dict, backend: dict | None) -> int:
-    if "phantom_drift" in queue_row:
-        return max(0, int(queue_row["phantom_drift"]))
-    if backend:
-        return max(0, int(backend.get("phantom_drift", backend.get("drift", 0))))
-    return max(0, int(queue_row.get("bom_units", 0)))
-
-
 def _compute_total_phantom_drift_from_flattop_queue(
     containers_overlay: dict | None = None,
 ) -> int:
@@ -602,7 +603,7 @@ def _compute_total_phantom_drift_from_flattop_queue(
         if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
             continue
         for row in ft.get("skus") or []:
-            total += kpi_shrink_units_for_row(row)
+            total += kpi_detected_phantom_drift_units_for_row(row)
     return total
 
 
@@ -972,14 +973,14 @@ def render_execution_sku_profile(
 
 
 def _unaccounted_variance_value(sku_data: dict) -> int:
-    resolution = sku_data.get("resolution_type")
-    if resolution == "none":
-        return _confirmed_loss_units(sku_data)
+    if "unaccounted_variance" in sku_data:
+        return max(0, int(sku_data["unaccounted_variance"]))
     if sku_data.get("is_resolved"):
-        if resolution == "partial":
-            return int(sku_data.get("shrink_confirmed", 0))
         return 0
-    return max(int(sku_data.get("variance", 0)), int(sku_data.get("drift", 0)))
+    expected = int(sku_data.get("expected", 0))
+    worked = int(sku_data.get("worked", 0))
+    backstock = int(sku_data.get("backstock", 0))
+    return max(0, expected - worked - backstock)
 
 
 def render_unaccounted_variance_metric(
@@ -1014,13 +1015,13 @@ def _operational_widget_key(
 
 
 def _outstanding_units(sku_data: dict) -> int:
-    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
+    return _unaccounted_variance_value(sku_data)
 
 
 def _requires_operational_control_deck(sku_data: dict) -> bool:
     if sku_data.get("is_resolved"):
         return False
-    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
+    return _unaccounted_variance_value(sku_data) > 0
 
 
 def _container_view_from_task(task: dict) -> dict:
@@ -1169,15 +1170,11 @@ def _render_execution_telemetry_sku_block(
                 f"{sku_data.get('shrink_confirmed')} confirmed as shrink."
             )
     else:
-        if sku_data.get("drift", 0) > 0:
+        unaccounted = _unaccounted_variance_value(sku_data)
+        if unaccounted > 0:
             st.warning(
-                f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-                f"'{product_name}' are missing and completely unaccounted for in system telemetry."
-            )
-        elif sku_data.get("variance", 0) > 0:
-            st.warning(
-                f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
-                "System suspects untracked backstock routing."
+                f"⚠️ **UNACCOUNTED VARIANCE:** {unaccounted} units of "
+                f"'{product_name}' are missing and need to be verified on the floor."
             )
         else:
             st.success(
@@ -1200,7 +1197,7 @@ def _session_flattop_by_manifest(manifest_key: str) -> dict | None:
 def _partition_flattop_cards_for_overview(
     cards: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """Live Scenario B injects vs baseline backlog (includes resolved historical manifests)."""
+    """Live on-board manifests vs backlog (resolved historical and archived rows)."""
     injected: list[dict] = []
     baseline: list[dict] = []
     for card in cards:
@@ -1208,11 +1205,7 @@ def _partition_flattop_cards_for_overview(
         ft = _session_flattop_by_manifest(
             card.get("manifest_instance_id") or fleet_id
         )
-        if (
-            ft is not None
-            and flattop_is_active_on_board(ft)
-            and fleet_id not in _baseline_flattop_ids()
-        ):
+        if ft is not None and fleet_slot_occupied_by_queue_entry(ft):
             injected.append(card)
         else:
             baseline.append(card)

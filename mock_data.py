@@ -128,6 +128,40 @@ def flattop_queue_sku_is_resolved(row: dict) -> bool:
     return bool(row.get("is_resolved") or row.get("resolved"))
 
 
+def flattop_sku_expected_qty(row: dict) -> int:
+    return int(row.get("expected_qty", row.get("bom_units", 0)))
+
+
+def flattop_sku_worked_to_shelf(row: dict) -> int:
+    return int(row.get("worked_to_shelf", row.get("worked", 0)))
+
+
+def flattop_sku_sent_to_backstock(row: dict) -> int:
+    return int(row.get("sent_to_backstock", 0))
+
+
+def compute_flattop_sku_unaccounted_variance(row: dict) -> int:
+    """Missing units before resolution: Expected − Worked − Backstock."""
+    expected = flattop_sku_expected_qty(row)
+    worked = flattop_sku_worked_to_shelf(row)
+    backstock = flattop_sku_sent_to_backstock(row)
+    return max(0, expected - worked - backstock)
+
+
+def flattop_sku_unaccounted_variance(row: dict) -> int:
+    if "unaccounted_variance" in row:
+        return max(0, int(row["unaccounted_variance"]))
+    if flattop_queue_sku_is_resolved(row):
+        return 0
+    return compute_flattop_sku_unaccounted_variance(row)
+
+
+def initialize_live_flattop_sku_telemetry(row: dict) -> None:
+    """Scenario B / live ABANDONED rows: phantom drift 0 until shrink is confirmed."""
+    row["phantom_drift"] = 0
+    row["unaccounted_variance"] = compute_flattop_sku_unaccounted_variance(row)
+
+
 def flattop_all_skus_resolved(ft: dict) -> bool:
     sku_rows = ft.get("skus") or []
     return bool(sku_rows) and all(flattop_queue_sku_is_resolved(row) for row in sku_rows)
@@ -191,25 +225,35 @@ def ensure_historical_manifest_instance_ids(flattops: list[dict]) -> None:
 
 
 def kpi_live_phantom_drift_units_for_row(row: dict) -> int:
-    """Unresolved phantom drift only (live shrink risk)."""
+    """Live unknown missing units (unaccounted variance before action)."""
     if flattop_queue_sku_is_resolved(row):
         return 0
-    return max(0, int(row.get("phantom_drift", 0)))
+    return flattop_sku_unaccounted_variance(row)
+
+
+def kpi_detected_phantom_drift_units_for_row(row: dict) -> int:
+    """Header KPI: unresolved unaccounted variance, or confirmed shrink after action."""
+    if not flattop_queue_sku_is_resolved(row):
+        return flattop_sku_unaccounted_variance(row)
+    resolution = row.get("resolution_type")
+    if resolution in ("none", "partial"):
+        return max(0, int(row.get("phantom_drift", row.get("shrink_confirmed", 0))))
+    return 0
 
 
 def kpi_shrink_units_for_row(row: dict) -> int:
-    """Units that count toward daily shrink cost (live drift or finalized write-offs)."""
+    """Confirmed shrink only (phantom_drift after resolution — not live unaccounted variance)."""
     if flattop_queue_sku_is_resolved(row):
         resolution = row.get("resolution_type")
         if resolution == "none":
             return max(
                 0,
-                int(row.get("finalized_shrink_units", row.get("shrink_confirmed", 0))),
+                int(row.get("phantom_drift", row.get("finalized_shrink_units", row.get("shrink_confirmed", 0)))),
             )
         if resolution == "partial":
-            return max(0, int(row.get("shrink_confirmed", 0)))
+            return max(0, int(row.get("phantom_drift", row.get("shrink_confirmed", 0))))
         return 0
-    return max(0, int(row.get("phantom_drift", 0)))
+    return 0
 
 
 def flattop_is_displayable_in_ui(ft: dict) -> bool:
@@ -258,27 +302,34 @@ _BASELINE_SKU_SPLITS: dict[str, dict[str, int]] = {
     "BAKED-BEANS-6PK": {
         "expected_qty": 12,
         "worked_to_shelf": 6,
-        "sent_to_backstock": 2,
-        "phantom_drift": 4,
+        "sent_to_backstock": 6,
+        "phantom_drift": 0,
+        "unaccounted_variance": 0,
+        "recovered_units": 4,
     },
     "ORANGE-SODA-8PK": {
         "expected_qty": 8,
         "worked_to_shelf": 6,
-        "sent_to_backstock": 0,
-        "phantom_drift": 2,
+        "sent_to_backstock": 2,
+        "phantom_drift": 0,
+        "unaccounted_variance": 0,
+        "recovered_units": 2,
     },
     "LAGER-4PK": {
         "expected_qty": 6,
         "worked_to_shelf": 3,
-        "sent_to_backstock": 0,
-        "phantom_drift": 3,
+        "sent_to_backstock": 3,
+        "phantom_drift": 0,
+        "unaccounted_variance": 0,
+        "recovered_units": 3,
     },
 }
 
 MOCK_FLATTOP_BACKLOG: list[dict] = [
     {
         "flattop_id": "FT-02",
-        "status": FLATTOP_STATUS_ABANDONED,
+        "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
+        "resolution_type": "all",
         "skus": [
             {
                 "sku": "BAKED-BEANS-6PK",
@@ -291,7 +342,8 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-03",
-        "status": FLATTOP_STATUS_ABANDONED,
+        "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
+        "resolution_type": "all",
         "skus": [
             {
                 "sku": "ORANGE-SODA-8PK",
@@ -304,7 +356,8 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-04",
-        "status": FLATTOP_STATUS_ABANDONED,
+        "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
+        "resolution_type": "all",
         "skus": [
             {
                 "sku": "LAGER-4PK",
@@ -343,12 +396,15 @@ def standardize_flattop_sku_row(row: dict) -> dict:
         sku.setdefault(key, value)
     for key, value in _BASELINE_SKU_SPLITS.get(sku_code, {}).items():
         sku.setdefault(key, value)
-    if "phantom_drift" not in sku:
-        sku["phantom_drift"] = bom
+    sku.setdefault("phantom_drift", 0)
+    sku.setdefault("worked_to_shelf", 0)
+    sku.setdefault("sent_to_backstock", 0)
     if "price" not in sku and sku.get("unit_price_pence") is not None:
         sku["price"] = catalog_unit_retail_gbp(sku)
     sku.setdefault("is_resolved", False)
     sku.setdefault("resolved", False)
+    if not flattop_queue_sku_is_resolved(sku):
+        initialize_live_flattop_sku_telemetry(sku)
     return sku
 
 
@@ -368,11 +424,18 @@ def standardize_flattop_queue_entry(
     if assign_manifest_instance_id and not ft.get("manifest_instance_id"):
         ft["manifest_instance_id"] = new_manifest_instance_id(fleet_id)
     ft["skus"] = [standardize_flattop_sku_row(row) for row in (ft.get("skus") or [])]
+    if ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        ft.setdefault("resolution_type", "all")
+        for row in ft["skus"]:
+            row["is_resolved"] = True
+            row["resolved"] = True
+            row.setdefault("resolution_type", "all")
+            row.setdefault("unaccounted_variance", 0)
     return ft
 
 
 def default_mock_flattop_backlog() -> list[dict]:
-    """Baseline queue FT-02, FT-03, FT-04 — standardized manifests (matches Scenario B shape)."""
+    """Baseline historical backlog FT-02, FT-03, FT-04 — not live ABANDONED manifests."""
     return [
         standardize_flattop_queue_entry(entry)
         for entry in copy.deepcopy(MOCK_FLATTOP_BACKLOG)
