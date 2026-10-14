@@ -170,11 +170,13 @@ BASELINE_HISTORICAL_SENT_TO_BACKSTOCK: dict[str, int] = {
 
 
 def enforce_baseline_historical_sku_telemetry(ft: dict) -> None:
-    """Lock All Found math for seeded FT-02/03/04 — never inherit live-engine backstock splits."""
-    fleet_id = manifest_fleet_id(ft)
-    if fleet_id not in baseline_flattop_ids():
+    """Lock All Found math for the three static MOCK_FLATTOP_BACKLOG seeds only."""
+    if not ft.get("is_baseline_seed"):
         return
     if ft.get("status") != FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        return
+    fleet_id = manifest_fleet_id(ft)
+    if fleet_id not in baseline_flattop_ids():
         return
     backstock = BASELINE_HISTORICAL_SENT_TO_BACKSTOCK[fleet_id]
     for row in ft.get("skus") or []:
@@ -206,6 +208,25 @@ def flattop_is_active_on_board(ft: dict) -> bool:
     if not (ft.get("skus") or []):
         return False
     return not flattop_all_skus_resolved(ft)
+
+
+def flattop_is_pending_edge_task(ft: dict) -> bool:
+    """Live ABANDONED manifest with at least one unresolved SKU (not historical backlog)."""
+    if ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        return False
+    if ft.get("status") != FLATTOP_STATUS_ABANDONED:
+        return False
+    for row in ft.get("skus") or []:
+        if flattop_queue_sku_is_resolved(row):
+            continue
+        if flattop_sku_unaccounted_variance(row) > 0:
+            return True
+    return False
+
+
+def count_pending_edge_tasks_from_queue(flattops: list[dict] | None = None) -> int:
+    """Pending Edge Tasks KPI — session queue only, never backend mock containers."""
+    return sum(1 for ft in (flattops or []) if flattop_is_pending_edge_task(ft))
 
 
 def new_manifest_instance_id(fleet_id: str) -> str:
@@ -261,14 +282,42 @@ def kpi_live_phantom_drift_units_for_row(row: dict) -> int:
     return flattop_sku_unaccounted_variance(row)
 
 
+def kpi_total_missing_units_for_row(row: dict) -> int:
+    """At-risk unit volume: confirmed phantom drift plus live unaccounted variance."""
+    phantom = max(0, int(row.get("phantom_drift", 0)))
+    unaccounted = flattop_sku_unaccounted_variance(row)
+    return phantom + unaccounted
+
+
 def kpi_detected_phantom_drift_units_for_row(row: dict) -> int:
-    """Header KPI: unresolved unaccounted variance, or confirmed shrink after action."""
-    if not flattop_queue_sku_is_resolved(row):
-        return flattop_sku_unaccounted_variance(row)
-    resolution = row.get("resolution_type")
-    if resolution in ("none", "partial"):
-        return max(0, int(row.get("phantom_drift", row.get("shrink_confirmed", 0))))
-    return 0
+    """Alias for header KPI — total missing units (drift + unaccounted variance)."""
+    return kpi_total_missing_units_for_row(row)
+
+
+def queue_row_unit_retail_gbp(row: dict) -> float:
+    queue_price = row.get("price")
+    if queue_price is not None and float(queue_price) > 0:
+        return float(queue_price)
+    if row.get("unit_price_pence") is not None:
+        return catalog_unit_retail_gbp(row)
+    return DEFAULT_SHRINK_UNIT_PRICE_GBP
+
+
+def compute_queue_at_risk_totals(flattops: list[dict] | None) -> tuple[int, float]:
+    """Header KPI pair — missing units and retail exposure from session queue rows."""
+    total_units = 0
+    total_cost = 0.0
+    for ft in flattops or []:
+        if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
+            continue
+        for row in ft.get("skus") or []:
+            # Includes live unaccounted_variance and confirmed phantom_drift on
+            # RESOLVED_HISTORICAL rows (Not Present / Partial archives).
+            missing = kpi_total_missing_units_for_row(row)
+            total_units += missing
+            if missing > 0:
+                total_cost += missing * queue_row_unit_retail_gbp(row)
+    return total_units, round(total_cost, 2)
 
 
 def kpi_shrink_units_for_row(row: dict) -> int:
@@ -358,6 +407,7 @@ _BASELINE_SKU_SPLITS: dict[str, dict[str, int]] = {
 MOCK_FLATTOP_BACKLOG: list[dict] = [
     {
         "flattop_id": "FT-02",
+        "is_baseline_seed": True,
         "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
         "resolution_type": "all",
         "skus": [
@@ -375,6 +425,7 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-03",
+        "is_baseline_seed": True,
         "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
         "resolution_type": "all",
         "skus": [
@@ -392,6 +443,7 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
     },
     {
         "flattop_id": "FT-04",
+        "is_baseline_seed": True,
         "status": FLATTOP_STATUS_RESOLVED_HISTORICAL,
         "resolution_type": "all",
         "skus": [
@@ -419,7 +471,9 @@ CATALOG_BY_EAN = {row["ean"]: row["product_name"] for row in MASTER_CATALOG}
 CATALOG_ROW_BY_EAN = {row["ean"]: row for row in MASTER_CATALOG}
 
 
-def standardize_flattop_sku_row(row: dict, *, historical_seed: bool = False) -> dict:
+def standardize_flattop_sku_row(
+    row: dict, *, historical_seed: bool = False, baseline_seed: bool = False
+) -> dict:
     """One queue SKU line — same keys as Scenario B `catalog_rows_to_flattop_queue_skus` output."""
     sku = copy.deepcopy(row)
     catalog = CATALOG_ROW_BY_EAN.get(str(sku.get("ean") or "").strip(), {})
@@ -433,8 +487,9 @@ def standardize_flattop_sku_row(row: dict, *, historical_seed: bool = False) -> 
     )
     for key, value in catalog.items():
         sku.setdefault(key, value)
-    for key, value in _BASELINE_SKU_SPLITS.get(sku_code, {}).items():
-        sku.setdefault(key, value)
+    if baseline_seed:
+        for key, value in _BASELINE_SKU_SPLITS.get(sku_code, {}).items():
+            sku.setdefault(key, value)
     sku.setdefault("phantom_drift", 0)
     sku.setdefault("worked_to_shelf", 0)
     sku.setdefault("sent_to_backstock", 0)
@@ -462,15 +517,20 @@ def standardize_flattop_queue_entry(
     ft["fleet_id"] = fleet_id
     ft["flattop_id"] = fleet_id
     ft["status"] = ft.get("status") or FLATTOP_STATUS_ABANDONED
+    if entry.get("is_baseline_seed"):
+        ft["is_baseline_seed"] = True
     ft["trx_ids"] = list(trx_ids if trx_ids is not None else ft.get("trx_ids") or [])
     if assign_manifest_instance_id and not ft.get("manifest_instance_id"):
         ft["manifest_instance_id"] = new_manifest_instance_id(fleet_id)
     is_historical = ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL
+    baseline_seed = bool(ft.get("is_baseline_seed"))
     ft["skus"] = [
-        standardize_flattop_sku_row(row, historical_seed=is_historical)
+        standardize_flattop_sku_row(
+            row, historical_seed=is_historical, baseline_seed=baseline_seed
+        )
         for row in (ft.get("skus") or [])
     ]
-    if is_historical:
+    if is_historical and baseline_seed:
         ft.setdefault("resolution_type", "all")
         enforce_baseline_historical_sku_telemetry(ft)
     return ft
@@ -478,13 +538,10 @@ def standardize_flattop_queue_entry(
 
 def default_mock_flattop_backlog() -> list[dict]:
     """Baseline historical backlog FT-02, FT-03, FT-04 — not live ABANDONED manifests."""
-    backlog = [
+    return [
         standardize_flattop_queue_entry(entry)
         for entry in copy.deepcopy(MOCK_FLATTOP_BACKLOG)
     ]
-    for ft in backlog:
-        enforce_baseline_historical_sku_telemetry(ft)
-    return backlog
 
 
 def baseline_flattop_ids() -> frozenset[str]:

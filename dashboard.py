@@ -1,8 +1,10 @@
+import copy
 import html
 import json
 import os
 import sqlite3
 from pathlib import Path
+from uuid import NAMESPACE_DNS, uuid5
 
 import pandas as pd
 import requests
@@ -48,8 +50,8 @@ from mock_data import (
     sku_code_from_queue_row,
     sync_scenario_b_available_flattops_pool,
     FLATTOP_UI_DISPLAY_STATUSES,
-    kpi_detected_phantom_drift_units_for_row,
-    kpi_shrink_units_for_row,
+    compute_queue_at_risk_totals,
+    count_pending_edge_tasks_from_queue,
     flattop_sku_unaccounted_variance,
     flattop_manifest_key,
     compact_instance_id_for_display,
@@ -594,38 +596,22 @@ def _shrink_unit_price_gbp(queue_row: dict, backend: dict | None) -> float:
     return _DEFAULT_SHRINK_UNIT_PRICE_GBP
 
 
-def _compute_total_phantom_drift_from_flattop_queue(
+def _compute_total_missing_units_from_flattop_queue(
     containers_overlay: dict | None = None,
 ) -> int:
-    """Live phantom_drift plus finalized shrink units (aligned with Daily Shrink Cost volume)."""
+    """Sum phantom_drift + unaccounted_variance across displayable queue SKUs."""
     del containers_overlay
-    total = 0
-    for ft in st.session_state.get("flattops") or []:
-        if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
-            continue
-        for row in ft.get("skus") or []:
-            total += kpi_detected_phantom_drift_units_for_row(row)
-    return total
+    units, _ = compute_queue_at_risk_totals(st.session_state.get("flattops"))
+    return units
 
 
-def _compute_total_shrink_cost_from_flattop_queue(
+def _compute_total_at_risk_cost_from_flattop_queue(
     containers_overlay: dict | None = None,
 ) -> float:
-    """Live drift plus finalized shrink write-offs (including historical backlog cards)."""
+    """Retail value of total missing units (same basis as Total Missing Units KPI)."""
     del containers_overlay
-    total = 0.0
-    for ft in st.session_state.get("flattops") or []:
-        if ft.get("status") not in FLATTOP_UI_DISPLAY_STATUSES:
-            continue
-        for row in ft.get("skus") or []:
-            shrink_units = kpi_shrink_units_for_row(row)
-            if shrink_units <= 0:
-                continue
-            total += shrink_units * _shrink_unit_price_gbp(row, None)
-    session_floor = float(
-        st.session_state.get(SESSION_DAILY_SHRINK_FROM_QUEUE_KEY, 0.0)
-    )
-    return round(max(total, session_floor), 2)
+    _, cost = compute_queue_at_risk_totals(st.session_state.get("flattops"))
+    return cost
 
 
 def _is_total_power_cut_exception(exc: dict) -> bool:
@@ -696,19 +682,16 @@ def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
     """Recompute drift/task metrics from quarantined live containers only."""
     total_drift = 0
     total_shrink_cost = 0.0
-    pending_edge_tasks = 0
-
     for container in containers.values():
-        container_pending = False
         for sku in container.get("skus", []):
             drift = int(sku.get("drift", 0))
             total_drift += drift
             unit_price = float(sku.get("price") or 0.0)
             total_shrink_cost += drift * unit_price
-            if int(sku.get("variance", 0)) > 0 and not sku.get("is_resolved"):
-                container_pending = True
-        if container_pending:
-            pending_edge_tasks += 1
+
+    pending_edge_tasks = count_pending_edge_tasks_from_queue(
+        st.session_state.get("flattops")
+    )
 
     waste_qty = int(base_metrics.get("daily_waste_qty") or 0)
     waste_cost = float(base_metrics.get("daily_waste_cost") or 0.0)
@@ -795,24 +778,13 @@ live_containers = filter_containers_for_live_tabs(containers, active_exceptions)
 live_metrics = derive_live_overview_metrics(live_containers, metrics)
 _sync_kpi_session_state(metrics)
 
-if st.session_state.get(_DASHBOARD_FORCE_EMPTY_TELEMETRY_KEY):
-    _display_phantom_drift = int(
-        st.session_state.get(_KPI_SESSION_DETECTED_PHANTOM_DRIFT, 0)
-    )
-    _display_pending_edge_tasks = int(
-        st.session_state.get(_KPI_SESSION_PENDING_EDGE_TASKS, 0)
-    )
-    current_total_shrink_cost = float(
-        st.session_state.get(_KPI_SESSION_DAILY_SHRINK_COST, 0.0)
-    )
-else:
-    _display_phantom_drift = _compute_total_phantom_drift_from_flattop_queue(
-        live_containers
-    )
-    _display_pending_edge_tasks = int(live_metrics["pending_edge_tasks"])
-    current_total_shrink_cost = _compute_total_shrink_cost_from_flattop_queue(
-        live_containers
-    )
+_display_phantom_drift = _compute_total_missing_units_from_flattop_queue(
+    live_containers
+)
+_display_pending_edge_tasks = int(live_metrics["pending_edge_tasks"])
+current_total_shrink_cost = _compute_total_at_risk_cost_from_flattop_queue(
+    live_containers
+)
 
 # ---------------------------------------------------------
 # Top Header Section: Global Metrics
@@ -829,16 +801,16 @@ with col2:
     )
 with col3:
     st.metric(
-        label="Detected Phantom Drift Units",
+        label="Total Missing Units",
         value=_display_phantom_drift,
-        delta="Shrink Risk",
+        delta="Unconfirmed + Confirmed",
         delta_color="inverse",
     )
 with col4:
     st.metric(
-        label="Daily Shrink Cost",
+        label="Total At-Risk Cost",
         value=f"£{current_total_shrink_cost:.2f}",
-        delta="Revenue Lost",
+        delta="Retail Exposure",
         delta_color="inverse",
     )
 with col5:
@@ -1001,18 +973,72 @@ def _sku_widget_slug(sku: str) -> str:
     return sku.replace("-", "_").lower()
 
 
+def _manifest_widget_slug(manifest_key: str) -> str:
+    """Stable Streamlit key segment — instance ids contain '#' which must not collide across cards."""
+    return (
+        str(manifest_key)
+        .strip()
+        .lower()
+        .replace("#", "_inst_")
+        .replace(" ", "")
+    )
+
+
 def _operational_widget_key(
     action: str,
-    container_id: str,
+    manifest_key: str,
     sku: str,
     *,
     ean: str = "",
     widget_index: int | str | None = None,
 ) -> str:
+    manifest_slug = _manifest_widget_slug(manifest_key)
     ean_slug = (ean or "noean").replace(" ", "")
-    if widget_index is not None:
-        return f"{action}_{container_id}_{ean_slug}_{widget_index}".lower()
-    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
+    sku_slug = _sku_widget_slug(sku)
+    stable_id = uuid5(
+        NAMESPACE_DNS,
+        f"{manifest_key}|{sku}|{action}|{widget_index or ''}|{ean_slug}",
+    ).hex[:12]
+    fleet_slug = fleet_id_from_container_ref(manifest_key).lower()
+    return f"btn_{action}_{fleet_slug}_{manifest_slug}_{sku_slug}_{stable_id}"
+
+
+_RESOLUTION_ACTION_TO_API: dict[str, str] = {
+    "all_found": "all",
+    "not_present": "none",
+    "partial": "partial",
+}
+
+
+def _submit_resolution_action(
+    *,
+    action: str,
+    fleet_id: str,
+    sku: str,
+    manifest_instance_id: str,
+    partial_flag_key: str,
+    partial_qty_key: str | None = None,
+) -> None:
+    """Single on_click entry — action string selects queue/API routing (no shared callbacks)."""
+    resolution_type = _RESOLUTION_ACTION_TO_API.get(str(action).strip())
+    if resolution_type is None:
+        st.error(f"Unknown resolution action: {action!r}")
+        st.stop()
+    recovered_units = 0
+    if action == "partial":
+        qty_key = partial_qty_key or ""
+        if not qty_key:
+            st.error("Partial resolution is missing its quantity widget key.")
+            st.stop()
+        recovered_units = int(st.session_state.get(qty_key, 1))
+    submit_resolution(
+        fleet_id,
+        sku,
+        resolution_type,
+        recovered_units,
+        manifest_instance_id=manifest_instance_id,
+        partial_flag_key=partial_flag_key,
+    )
 
 
 def _outstanding_units(sku_data: dict) -> int:
@@ -1061,44 +1087,48 @@ def render_operational_control_deck(
     if partial_flag not in st.session_state:
         st.session_state[partial_flag] = False
 
+    all_found_key = _operational_widget_key("all_found", manifest_key, sku, **key_kwargs)
+    not_present_key = _operational_widget_key(
+        "not_present", manifest_key, sku, **key_kwargs
+    )
+    partial_toggle_key = _operational_widget_key("partial", manifest_key, sku, **key_kwargs)
+    partial_qty_key = _operational_widget_key(
+        "partial_qty", manifest_key, sku, **key_kwargs
+    )
+    confirm_partial_key = _operational_widget_key(
+        "confirm_partial", manifest_key, sku, **key_kwargs
+    )
+    resolution_base = {
+        "fleet_id": fleet_id,
+        "sku": sku,
+        "manifest_instance_id": manifest_key,
+        "partial_flag_key": partial_flag,
+    }
+
     st.markdown("<br>", unsafe_allow_html=True)
     ctrl_cols = st.columns(3)
     with ctrl_cols[0]:
-        if st.button(
+        st.button(
             f"All Found ({units})",
-            key=_operational_widget_key("all_found", manifest_key, sku, **key_kwargs),
+            key=all_found_key,
             use_container_width=True,
-        ):
-            submit_resolution(
-                fleet_id,
-                sku,
-                "all",
-                units,
-                manifest_instance_id=manifest_key,
-                outstanding_before=units,
-                partial_flag_key=partial_flag,
-            )
+            on_click=_submit_resolution_action,
+            kwargs=copy.deepcopy({**resolution_base, "action": "all_found"}),
+        )
 
     with ctrl_cols[1]:
-        if st.button(
+        st.button(
             "Not Present (0)",
-            key=_operational_widget_key("not_present", manifest_key, sku, **key_kwargs),
+            key=not_present_key,
             use_container_width=True,
-        ):
-            submit_resolution(
-                fleet_id,
-                sku,
-                "none",
-                0,
-                manifest_instance_id=manifest_key,
-                outstanding_before=units,
-                partial_flag_key=partial_flag,
-            )
+            on_click=_submit_resolution_action,
+            kwargs=copy.deepcopy({**resolution_base, "action": "not_present"}),
+        )
 
     with ctrl_cols[2]:
         if st.button(
             f"Partial ({units})",
-            key=_operational_widget_key("partial", manifest_key, sku, **key_kwargs),
+            key=partial_toggle_key,
             use_container_width=True,
         ):
             st.session_state[partial_flag] = not st.session_state[partial_flag]
@@ -1108,33 +1138,28 @@ def render_operational_control_deck(
         partial_col1, partial_col2 = st.columns([2, 1])
         with partial_col1:
             max_partial = max(1, units - 1) if units > 1 else 1
-            partial_qty = st.number_input(
+            st.number_input(
                 "Quantity Recovered?",
                 min_value=1,
                 max_value=max_partial,
                 value=1,
-                key=_operational_widget_key(
-                    "partial_qty", manifest_key, sku, **key_kwargs
-                ),
+                key=partial_qty_key,
             )
         with partial_col2:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
+            st.button(
                 "Confirm Partial",
                 type="primary",
-                key=_operational_widget_key(
-                    "confirm_partial", manifest_key, sku, **key_kwargs
+                key=confirm_partial_key,
+                on_click=_submit_resolution_action,
+                kwargs=copy.deepcopy(
+                    {
+                        **resolution_base,
+                        "action": "partial",
+                        "partial_qty_key": partial_qty_key,
+                    }
                 ),
-            ):
-                submit_resolution(
-                    fleet_id,
-                    sku,
-                    "partial",
-                    partial_qty,
-                    manifest_instance_id=manifest_key,
-                    outstanding_before=units,
-                    partial_flag_key=partial_flag,
-                )
+            )
 
 
 def _render_execution_telemetry_sku_block(
