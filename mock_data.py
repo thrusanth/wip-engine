@@ -162,6 +162,36 @@ def initialize_live_flattop_sku_telemetry(row: dict) -> None:
     row["unaccounted_variance"] = compute_flattop_sku_unaccounted_variance(row)
 
 
+BASELINE_HISTORICAL_SENT_TO_BACKSTOCK: dict[str, int] = {
+    "FT-02": 6,
+    "FT-03": 2,
+    "FT-04": 3,
+}
+
+
+def enforce_baseline_historical_sku_telemetry(ft: dict) -> None:
+    """Lock All Found math for seeded FT-02/03/04 — never inherit live-engine backstock splits."""
+    fleet_id = manifest_fleet_id(ft)
+    if fleet_id not in baseline_flattop_ids():
+        return
+    if ft.get("status") != FLATTOP_STATUS_RESOLVED_HISTORICAL:
+        return
+    backstock = BASELINE_HISTORICAL_SENT_TO_BACKSTOCK[fleet_id]
+    for row in ft.get("skus") or []:
+        sku_code = str(row.get("sku") or "")
+        splits = _BASELINE_SKU_SPLITS.get(sku_code, {})
+        expected = int(row.get("expected_qty", splits.get("expected_qty", row.get("bom_units", 0))))
+        worked = int(row.get("worked_to_shelf", splits.get("worked_to_shelf", 0)))
+        row["expected_qty"] = expected
+        row["worked_to_shelf"] = worked
+        row["sent_to_backstock"] = backstock
+        row["phantom_drift"] = 0
+        row["unaccounted_variance"] = 0
+        row["is_resolved"] = True
+        row["resolved"] = True
+        row["resolution_type"] = "all"
+
+
 def flattop_all_skus_resolved(ft: dict) -> bool:
     sku_rows = ft.get("skus") or []
     return bool(sku_rows) and all(flattop_queue_sku_is_resolved(row) for row in sku_rows)
@@ -336,6 +366,9 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
                 "ean": "5012345678901",
                 "product_name": "Heinz Baked Beans 6pk",
                 "bom_units": 12,
+                "expected_qty": 12,
+                "worked_to_shelf": 6,
+                "sent_to_backstock": 6,
             }
         ],
         "trx_ids": [],
@@ -350,6 +383,9 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
                 "ean": "5012345678948",
                 "product_name": "Orange Soda 8pk",
                 "bom_units": 8,
+                "expected_qty": 8,
+                "worked_to_shelf": 6,
+                "sent_to_backstock": 2,
             }
         ],
         "trx_ids": [],
@@ -364,6 +400,9 @@ MOCK_FLATTOP_BACKLOG: list[dict] = [
                 "ean": "5012345678962",
                 "product_name": "Lager 4pk",
                 "bom_units": 6,
+                "expected_qty": 6,
+                "worked_to_shelf": 3,
+                "sent_to_backstock": 3,
             }
         ],
         "trx_ids": [],
@@ -380,7 +419,7 @@ CATALOG_BY_EAN = {row["ean"]: row["product_name"] for row in MASTER_CATALOG}
 CATALOG_ROW_BY_EAN = {row["ean"]: row for row in MASTER_CATALOG}
 
 
-def standardize_flattop_sku_row(row: dict) -> dict:
+def standardize_flattop_sku_row(row: dict, *, historical_seed: bool = False) -> dict:
     """One queue SKU line — same keys as Scenario B `catalog_rows_to_flattop_queue_skus` output."""
     sku = copy.deepcopy(row)
     catalog = CATALOG_ROW_BY_EAN.get(str(sku.get("ean") or "").strip(), {})
@@ -403,7 +442,10 @@ def standardize_flattop_sku_row(row: dict) -> dict:
         sku["price"] = catalog_unit_retail_gbp(sku)
     sku.setdefault("is_resolved", False)
     sku.setdefault("resolved", False)
-    if not flattop_queue_sku_is_resolved(sku):
+    if (
+        not historical_seed
+        and not flattop_queue_sku_is_resolved(sku)
+    ):
         initialize_live_flattop_sku_telemetry(sku)
     return sku
 
@@ -423,23 +465,26 @@ def standardize_flattop_queue_entry(
     ft["trx_ids"] = list(trx_ids if trx_ids is not None else ft.get("trx_ids") or [])
     if assign_manifest_instance_id and not ft.get("manifest_instance_id"):
         ft["manifest_instance_id"] = new_manifest_instance_id(fleet_id)
-    ft["skus"] = [standardize_flattop_sku_row(row) for row in (ft.get("skus") or [])]
-    if ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL:
+    is_historical = ft.get("status") == FLATTOP_STATUS_RESOLVED_HISTORICAL
+    ft["skus"] = [
+        standardize_flattop_sku_row(row, historical_seed=is_historical)
+        for row in (ft.get("skus") or [])
+    ]
+    if is_historical:
         ft.setdefault("resolution_type", "all")
-        for row in ft["skus"]:
-            row["is_resolved"] = True
-            row["resolved"] = True
-            row.setdefault("resolution_type", "all")
-            row.setdefault("unaccounted_variance", 0)
+        enforce_baseline_historical_sku_telemetry(ft)
     return ft
 
 
 def default_mock_flattop_backlog() -> list[dict]:
     """Baseline historical backlog FT-02, FT-03, FT-04 — not live ABANDONED manifests."""
-    return [
+    backlog = [
         standardize_flattop_queue_entry(entry)
         for entry in copy.deepcopy(MOCK_FLATTOP_BACKLOG)
     ]
+    for ft in backlog:
+        enforce_baseline_historical_sku_telemetry(ft)
+    return backlog
 
 
 def baseline_flattop_ids() -> frozenset[str]:

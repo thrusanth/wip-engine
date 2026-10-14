@@ -37,6 +37,7 @@ from mock_data import (
     SCENARIO_B_FLATTOP_INJECTION_POOL,
     catalog_unit_retail_gbp,
     default_mock_flattop_backlog,
+    enforce_baseline_historical_sku_telemetry,
     empty_overview_metrics,
     FLATTOP_STATUS_ABANDONED,
     FLATTOP_STATUS_RESOLVED_HISTORICAL,
@@ -57,13 +58,17 @@ from utils.transmit_scenario import inject_custom_payload
 
 
 def baseline_flattop_queue_for_purge() -> list[dict]:
-    """Baseline historical FT-02/03/04 with zeroed drift so KPI loops stay at 0 after purge."""
+    """Baseline historical FT-02/03/04 with balanced All Found telemetry after purge."""
     backlog = default_mock_flattop_backlog()
     for ft in backlog:
-        for row in ft.get("skus") or []:
-            row["phantom_drift"] = 0
-            row["sent_to_backstock"] = 0
+        enforce_baseline_historical_sku_telemetry(ft)
     return backlog
+
+
+def normalize_baseline_historical_flattops_in_session() -> None:
+    """Re-apply baseline backstock on reruns so legacy session rows cannot drift."""
+    for ft in st.session_state.get("flattops") or []:
+        enforce_baseline_historical_sku_telemetry(ft)
 
 
 def zero_header_kpi_session_keys() -> None:
@@ -91,13 +96,16 @@ def preserve_flattop_backlog_on_load() -> None:
     if "_flattop_backlog_seeded" not in st.session_state:
         st.session_state._flattop_backlog_seeded = True
         st.session_state.flattops = default_mock_flattop_backlog()
+        normalize_baseline_historical_flattops_in_session()
         sync_scenario_b_available_flattops_pool(st.session_state.flattops)
         return
     if not isinstance(st.session_state.get("flattops"), list):
         st.session_state.flattops = default_mock_flattop_backlog()
+        normalize_baseline_historical_flattops_in_session()
         return
     merge_missing_baseline_flattops()
     ensure_manifest_fleet_metadata(st.session_state.get("flattops") or [])
+    normalize_baseline_historical_flattops_in_session()
     finalize_resolved_injection_flattops_for_backlog()
 
 

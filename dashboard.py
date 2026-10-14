@@ -495,7 +495,8 @@ def _build_flattop_cards_from_queue(
             bom = int(row.get("bom_units", 0))
             backend = backend_skus.get(sku_code)
             queue_resolved = bool(row.get("is_resolved") or row.get("resolved"))
-            if backend:
+            prefer_queue_telemetry = queue_status == md.FLATTOP_STATUS_RESOLVED_HISTORICAL
+            if backend and not prefer_queue_telemetry:
                 is_resolved = bool(backend.get("is_resolved", False)) or queue_resolved
                 resolution_type = backend.get("resolution_type") or row.get(
                     "resolution_type"
