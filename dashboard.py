@@ -1982,7 +1982,6 @@ with tab6:
         [
             "Scenario A: Shelf Damage (Torn Multipack)",
             "Scenario B: Abandoned Flattop",
-            "Scenario C: Messy Fill (Planogram Mismatch)",
         ],
         key="shopfloor_scenario_choice",
     )
@@ -2071,64 +2070,3 @@ with tab6:
             disabled=not scenario_b_flattop_options,
         ):
             handle_scenario_b_injection(flattop_id, list(selected_names))
-
-    else:
-        st.markdown("#### Messy Fill (Planogram Mismatch)")
-        actual_name = st.selectbox(
-            "Actual Item Detected",
-            _ALL_PRODUCT_NAMES,
-            key="shopfloor_c_actual",
-        )
-        expected_name = st.selectbox(
-            "Expected Item for this Slot",
-            _ALL_PRODUCT_NAMES,
-            key="shopfloor_c_expected",
-        )
-        actual_row = _CATALOG_BY_NAME[actual_name]
-        expected_row = _CATALOG_BY_NAME[expected_name]
-        case_max = int(actual_row["bom_units"])
-        lost_col, fill_col = st.columns(2)
-        with lost_col:
-            units_lost = st.number_input(
-                "Units Lost",
-                min_value=0,
-                max_value=case_max,
-                value=0,
-                key="shopfloor_c_lost",
-            )
-        with fill_col:
-            max_fill = max(0, case_max - units_lost)
-            units_filled = st.number_input(
-                "Units Filled",
-                min_value=0,
-                max_value=max_fill,
-                value=max_fill,
-                key="shopfloor_c_fill",
-            )
-        if st.button("Inject Scenario C", key="shopfloor_inject_c"):
-            response, trx_id = inject_custom_payload(
-                ean=actual_row["ean"],
-                product_name=actual_name,
-                exception_type="PLANOGRAM_MISMATCH",
-                total_units=int(units_filled),
-                damaged_units=0,
-                units_lost=int(units_lost),
-                expected_ean=expected_row["ean"],
-                fixture_id="CAM-AISLE-04",
-            )
-            if response.status_code == 200:
-                st.session_state.active_ean = [actual_row["ean"]]
-                st.session_state.fixture_type = ["SHELF"]
-                st.session_state.sku_alert = 2
-                st.toast(f"✅ Injected {trx_id} — planogram mismatch recorded.")
-            else:
-                st.error(f"Inject failed ({response.status_code}): {response.text}")
-
-    with st.expander("Spline prep state (read-only preview)"):
-        st.write(
-            {
-                "active_ean": st.session_state.get("active_ean", []),
-                "fixture_type": st.session_state.get("fixture_type", ["SHELF"]),
-                "sku_alert": st.session_state.get("sku_alert", 0),
-            }
-        )
