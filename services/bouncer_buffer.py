@@ -152,6 +152,17 @@ def list_reconciliations(limit: int = 50, db_path: str = BOUNCER_DB_PATH) -> lis
         conn.close()
 
 
+def purge_reconciliation_log(db_path: str = BOUNCER_DB_PATH) -> int:
+    """Delete all rows from the reconciliation ledger. Returns rows removed."""
+    conn = ensure_bouncer_buffer(db_path)
+    try:
+        cursor = conn.execute("DELETE FROM reconciliation_log;")
+        conn.commit()
+        return int(cursor.rowcount if cursor.rowcount is not None else 0)
+    finally:
+        conn.close()
+
+
 def count_rejections_since(since_iso: str, db_path: str = BOUNCER_DB_PATH) -> int:
     conn = ensure_bouncer_buffer(db_path)
     try:

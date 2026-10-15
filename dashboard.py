@@ -1,16 +1,116 @@
+import copy
 import html
 import json
 import os
 import sqlite3
 from pathlib import Path
+from uuid import NAMESPACE_DNS, uuid5
 
 import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000/api/v1")
-API_KEY = os.getenv("WIP_API_KEY", "dev-wip-engine-key")
+from utils.transmit_scenario import inject_custom_payload
+
+import mock_data as md
+from mock_data import (
+    ALL_PRODUCT_NAMES,
+    API_BASE_URL,
+    API_KEY,
+    CATALOG_BY_EAN,
+    CATALOG_BY_NAME,
+    CATALOG_ROW_BY_EAN,
+    DASHBOARD_TABS,
+    DEFAULT_SHRINK_UNIT_PRICE_GBP,
+    EDGE_AI_BUFFER_PATH,
+    EDGE_AI_WEIGHTS_PATH,
+    EDGE_CAMERA_NETWORK_STATE,
+    FLATTOP_CARD_CONTAINER_KWARGS,
+    OFFLINE_CASE_EXPECTED_UNITS,
+    OFFLINE_FILL_AUDIT_ACTION,
+    OFFLINE_FILL_AUDIT_QUANTITY,
+    OFFLINE_FILL_AUDIT_SKU,
+    SHELF_PRODUCT_NAMES,
+    TAB_API_BOUNCER,
+    TAB_EDGE_AI,
+    TAB_OFFLINE_FILL,
+    TAB_SHOPFLOOR_SCENARIOS,
+    TAB_SYSTEM_OVERVIEW,
+    TAB_TELEMETRY,
+    TOTAL_POWER_CUT_STATUS,
+    canonical_flattop_id,
+    fleet_id_from_container_ref,
+    fleet_slot_occupied_by_queue_entry,
+    catalog_unit_retail_gbp,
+    empty_overview_metrics,
+    flattop_is_displayable_in_ui,
+    init_session_state_defaults,
+    shelf_sku_max_capacity,
+    sku_code_from_queue_row,
+    sync_scenario_b_available_flattops_pool,
+    FLATTOP_UI_DISPLAY_STATUSES,
+    compute_queue_at_risk_totals,
+    count_pending_edge_tasks_from_queue,
+    flattop_sku_unaccounted_variance,
+    flattop_manifest_key,
+    compact_instance_id_for_display,
+    SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
+)
+from state_handlers import (
+    extract_offline_recovery_payload,
+    handle_purge_reconciliation_log,
+    handle_scenario_b_injection,
+    load_dashboard_telemetry_from_session,
+    merge_backend_waste_metrics,
+    ensure_session_flattops_registered_with_backend,
+    preserve_flattop_backlog_on_load,
+    reset_dashboard_master_state,
+    scenario_a_update_damage,
+    scenario_a_update_fill,
+    submit_resolution,
+    sync_kpi_session_state,
+    sync_scenario_a_on_sku_change,
+)
+
+_DASHBOARD_CONTAINERS_KEY = md.DASHBOARD_CONTAINERS_KEY
+_DASHBOARD_METRICS_KEY = md.DASHBOARD_METRICS_KEY
+_DASHBOARD_OFFLINE_FILLS_KEY = md.DASHBOARD_OFFLINE_FILLS_KEY
+_DASHBOARD_INVENTORY_GAP_KEY = md.DASHBOARD_INVENTORY_GAP_KEY
+_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY = md.DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY
+_DASHBOARD_ACTIVE_EXCEPTIONS_KEY = md.DASHBOARD_ACTIVE_EXCEPTIONS_KEY
+_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY = md.DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY
+_USE_CACHED_TELEMETRY_KEY = md.USE_CACHED_TELEMETRY_KEY
+_DASHBOARD_FORCE_EMPTY_TELEMETRY_KEY = md.DASHBOARD_FORCE_EMPTY_TELEMETRY_KEY
+_FLATTOP_QUEUE_CLEARED_KEY = md.FLATTOP_QUEUE_CLEARED_KEY
+_RECONCILIATION_LOG_SESSION_KEY = md.RECONCILIATION_LOG_SESSION_KEY
+_KPI_SESSION_DETECTED_PHANTOM_DRIFT = md.KPI_SESSION_DETECTED_PHANTOM_DRIFT
+_KPI_SESSION_DAILY_SHRINK_COST = md.KPI_SESSION_DAILY_SHRINK_COST
+_KPI_SESSION_PENDING_EDGE_TASKS = md.KPI_SESSION_PENDING_EDGE_TASKS
+_KPI_SESSION_DAILY_WASTE_QTY = md.KPI_SESSION_DAILY_WASTE_QTY
+_KPI_SESSION_DAILY_WASTE_COST = md.KPI_SESSION_DAILY_WASTE_COST
+_DASHBOARD_ACTIVE_TAB_KEY = md.DASHBOARD_ACTIVE_TAB_KEY
+_EDGE_AI_TAB_LOADED_KEY = md.EDGE_AI_TAB_LOADED_KEY
+_BOUNCER_TAB_LOADED_KEY = md.BOUNCER_TAB_LOADED_KEY
+_DEFAULT_SHRINK_UNIT_PRICE_GBP = DEFAULT_SHRINK_UNIT_PRICE_GBP
+_MASTER_CATALOG = md.MASTER_CATALOG
+_CATALOG_BY_NAME = CATALOG_BY_NAME
+_SHELF_PRODUCT_NAMES = SHELF_PRODUCT_NAMES
+_ALL_PRODUCT_NAMES = ALL_PRODUCT_NAMES
+_CATALOG_BY_EAN = CATALOG_BY_EAN
+_CATALOG_ROW_BY_EAN = CATALOG_ROW_BY_EAN
+_catalog_unit_retail_gbp = catalog_unit_retail_gbp
+_empty_overview_metrics = empty_overview_metrics
+_sku_code_from_queue_row = sku_code_from_queue_row
+_shelf_sku_max_capacity = shelf_sku_max_capacity
+_sync_scenario_a_on_sku_change = sync_scenario_a_on_sku_change
+_scenario_a_update_fill = scenario_a_update_fill
+_scenario_a_update_damage = scenario_a_update_damage
+_merge_backend_waste_metrics = merge_backend_waste_metrics
+_load_dashboard_telemetry_from_session = load_dashboard_telemetry_from_session
+_extract_offline_recovery_payload = extract_offline_recovery_payload
+_reset_dashboard_master_state = reset_dashboard_master_state
+_sync_kpi_session_state = sync_kpi_session_state
 
 # 1. Page Configuration
 st.set_page_config(
@@ -18,6 +118,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+init_session_state_defaults()
+preserve_flattop_backlog_on_load()
+ensure_session_flattops_registered_with_backend()
+sync_scenario_b_available_flattops_pool(st.session_state.get("flattops", []))
 
 st.markdown(
     """
@@ -63,6 +168,14 @@ div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock
     background: rgba(32, 201, 151, 0.12) !important;
     color: #20c997 !important;
     border: 1px solid rgba(32, 201, 151, 0.55) !important;
+}
+.exec-pill-instance-id {
+    background: rgba(108, 117, 125, 0.12) !important;
+    color: #495057 !important;
+    border: 1px solid rgba(108, 117, 125, 0.35) !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.02em;
 }
 .exec-pill-status-verified {
     background: rgba(25, 135, 84, 0.14);
@@ -166,7 +279,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
     """Single table row — ported from api_bouncer/main.py get_dashboard()."""
     payload = _bouncer_row_payload(row)
     trace_id = html.escape(str(row.get("trace_id") or payload.get("trace_id") or ""))
-    sku = html.escape(str(row.get("sku") or payload.get("sku") or ""))
+    product_name = html.escape(_bouncer_product_display_name(row))
     ean = html.escape(str(row.get("ean") or payload.get("ean") or ""))
     status = str(row.get("status") or payload.get("status") or "")
     format_alert = html.escape(str(row.get("format_alert") or payload.get("format_alert") or ""))
@@ -177,22 +290,30 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
     tx_hook = payload.get("transaction_engine_hook")
     tx_data = "<span class='bouncer-empty-state'>No ledger action required (Synced)</span>"
     if isinstance(tx_hook, dict) and tx_hook:
+        if tx_hook.get("adjustment_summary"):
+            adj_html = html.escape(str(tx_hook["adjustment_summary"]))
+        else:
+            adj_html = (
+                f"Adj: {html.escape(str(tx_hook.get('ledger_adjustments', '')))}"
+            )
         tx_data = (
             f"<div class='bouncer-tx-data'><strong>TxType:</strong> "
             f"{html.escape(str(tx_hook.get('transaction_type', '')))}<br>"
-            f"<strong>Adj:</strong> {html.escape(str(tx_hook.get('ledger_adjustments', '')))}"
+            f"<strong>{adj_html}</strong>"
         )
         unit_price = tx_hook.get("calculated_unit_price")
+        rule = html.escape(str(tx_hook.get("compliance_rule_applied") or ""))
         if unit_price is not None:
             try:
                 price_display = html.escape(f"£{float(unit_price):.2f}")
             except (TypeError, ValueError):
                 price_display = html.escape(str(unit_price))
-            rule = html.escape(str(tx_hook.get("compliance_rule_applied") or ""))
             tx_data += (
                 f"<br><strong>Unit Price:</strong> {price_display}"
                 f"<br><strong>Rule & Math:</strong> {rule}"
             )
+        elif rule:
+            tx_data += f"<br><strong>Rule & Math:</strong> {rule}"
         tx_data += "</div>"
 
     label_data = ""
@@ -213,7 +334,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
         "<tr>"
         "<td>"
         f'<span class="bouncer-trace-id">{trace_id}</span><br>'
-        f'<span class="bouncer-sku-label">{sku}</span><br>'
+        f'<span class="bouncer-sku-label">{product_name}</span><br>'
         f'<span class="bouncer-ean-pill">EAN {ean}</span>'
         "</td>"
         f'<td><span class="bouncer-badge {status_class}">{status_icon} {status_esc}</span></td>'
@@ -323,42 +444,174 @@ def fetch_telemetry():
         st.error(f"Failed to connect to backend API: {e}")
         st.stop()
 
-_DASHBOARD_CONTAINERS_KEY = "dashboard_containers"
-_DASHBOARD_METRICS_KEY = "dashboard_metrics"
-_DASHBOARD_OFFLINE_FILLS_KEY = "dashboard_offline_fill_audit"
-_DASHBOARD_INVENTORY_GAP_KEY = "dashboard_inventory_gap_audit"
-_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY = "dashboard_offline_gap_exceptions"
-_DASHBOARD_ACTIVE_EXCEPTIONS_KEY = "dashboard_active_exceptions"
-_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY = "dashboard_manifest_auto_confirm_audit"
-_USE_CACHED_TELEMETRY_KEY = "dashboard_use_cached_telemetry"
-_DASHBOARD_ACTIVE_TAB_KEY = "dashboard_active_tab"
-_EDGE_AI_TAB_LOADED_KEY = "dashboard_edge_ai_sqlite_loaded"
-_BOUNCER_TAB_LOADED_KEY = "dashboard_bouncer_api_loaded"
+def _bouncer_product_display_name(row: dict) -> str:
+    """Human-readable product title for the reconciliation log (master catalog fallback)."""
+    payload = _bouncer_row_payload(row)
+    explicit = payload.get("product_name") or row.get("product_name")
+    if explicit:
+        return str(explicit).strip()
+    ean = str(row.get("ean") or payload.get("ean") or "").strip()
+    if ean and ean in _CATALOG_BY_EAN:
+        return _CATALOG_BY_EAN[ean]
+    parent_sku = str(row.get("sku") or payload.get("sku") or "").strip()
+    if parent_sku.startswith("EAN-") and len(parent_sku) > 4:
+        catalog_name = _CATALOG_BY_EAN.get(parent_sku[4:])
+        if catalog_name:
+            return catalog_name
+    return parent_sku or "Unknown product"
 
-TAB_SYSTEM_OVERVIEW = "System Overview"
-TAB_TELEMETRY = "Telemetry & Exceptions"
-TAB_OFFLINE_FILL = "Offline Fill"
-TAB_EDGE_AI = "Edge AI Autonomy"
-TAB_API_BOUNCER = "API Bouncer"
-DASHBOARD_TABS = [
-    TAB_SYSTEM_OVERVIEW,
-    TAB_TELEMETRY,
-    TAB_OFFLINE_FILL,
-    TAB_EDGE_AI,
-    TAB_API_BOUNCER,
-]
 
-TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
+def _active_flattop_count() -> int:
+    return sum(
+        1
+        for ft in st.session_state.flattops
+        if ft.get("status") == "ABANDONED_MID_SHIFT"
+    )
 
-OFFLINE_FILL_AUDIT_SKU = "PASTA-CASE-12"
-OFFLINE_FILL_AUDIT_ACTION = "fill"
-OFFLINE_FILL_AUDIT_QUANTITY = 12
 
-EDGE_CAMERA_NETWORK_STATE = "[STATE: DISCONNECTED_AUTONOMY]"
-# Must match artifact paths written by ft-05.py (repo root, not env overrides).
-_REPO_ROOT = Path(__file__).resolve().parent
-EDGE_AI_WEIGHTS_PATH = _REPO_ROOT / "local_sku_weights_ft05.json"
-EDGE_AI_BUFFER_PATH = _REPO_ROOT / "offline_detection_buffer_ft05.db"
+def _build_flattop_cards_from_queue(
+    containers_overlay: dict | None = None,
+) -> list[dict]:
+    """One card per active flattop, with a line item per attached SKU (read-only; no session writes)."""
+    cards: list[dict] = []
+    overlay = containers_overlay or {}
+    for ft in st.session_state.flattops:
+        if not flattop_is_displayable_in_ui(ft):
+            continue
+        sku_rows = ft.get("skus") or []
+        flattop_id = ft["flattop_id"]
+        container_view = overlay.get(flattop_id) or {}
+        zone = container_view.get("zone") or "Abandoned Flattop"
+        queue_status = ft.get("status") or md.FLATTOP_STATUS_ABANDONED
+        container_status = (
+            queue_status
+            if queue_status == md.FLATTOP_STATUS_RESOLVED_HISTORICAL
+            else container_view.get("status") or queue_status
+        )
+        backend_skus = {
+            str(s.get("sku")): s for s in container_view.get("skus", [])
+        }
+        sku_lines: list[dict] = []
+        for row in sku_rows:
+            sku_code = _sku_code_from_queue_row(row)
+            bom = int(row.get("bom_units", 0))
+            backend = backend_skus.get(sku_code)
+            queue_resolved = bool(row.get("is_resolved") or row.get("resolved"))
+            prefer_queue_telemetry = queue_status == md.FLATTOP_STATUS_RESOLVED_HISTORICAL
+            if backend and not prefer_queue_telemetry:
+                is_resolved = bool(backend.get("is_resolved", False)) or queue_resolved
+                resolution_type = backend.get("resolution_type") or row.get(
+                    "resolution_type"
+                )
+                if is_resolved:
+                    drift = 0 if resolution_type == "all" else max(
+                        0, int(row.get("phantom_drift", backend.get("shrink_confirmed", 0)))
+                    )
+                else:
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                unaccounted = 0 if is_resolved else flattop_sku_unaccounted_variance(row)
+                ean_single = _coerce_single_ean_string(
+                    backend.get("ean") or row.get("ean", "")
+                )
+                sku_lines.append(
+                    {
+                        "sku": sku_code,
+                        "name": backend.get("name") or row["product_name"],
+                        "ean": ean_single,
+                        "expected": int(backend.get("expected", bom)),
+                        "worked": int(backend.get("worked", 0)),
+                        "drift": drift,
+                        "backstock": int(
+                            backend.get("backstock", row.get("sent_to_backstock", 0))
+                        ),
+                        "unaccounted_variance": unaccounted,
+                        "is_resolved": is_resolved,
+                        "resolution_type": resolution_type,
+                        "recovered_units": int(
+                            backend.get("recovered_units", row.get("recovered_units", 0))
+                        ),
+                        "shrink_confirmed": int(
+                            backend.get("shrink_confirmed", row.get("shrink_confirmed", 0))
+                        ),
+                    }
+                )
+            else:
+                shrink_confirmed = int(row.get("shrink_confirmed", 0))
+                finalized = int(
+                    row.get("finalized_shrink_units", shrink_confirmed)
+                )
+                if queue_resolved:
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                    if drift <= 0 and row.get("resolution_type") == "none":
+                        drift = finalized
+                    elif drift <= 0 and row.get("resolution_type") == "partial":
+                        drift = shrink_confirmed
+                else:
+                    drift = max(0, int(row.get("phantom_drift", 0)))
+                unaccounted = (
+                    0 if queue_resolved else flattop_sku_unaccounted_variance(row)
+                )
+                ean_single = _coerce_single_ean_string(row.get("ean", ""))
+                sku_lines.append(
+                    {
+                        "sku": sku_code,
+                        "name": row["product_name"],
+                        "ean": ean_single,
+                        "expected": int(row.get("expected_qty", bom)),
+                        "worked": int(row.get("worked_to_shelf", row.get("worked", 0))),
+                        "drift": drift,
+                        "backstock": int(row.get("sent_to_backstock", 0)),
+                        "unaccounted_variance": unaccounted,
+                        "is_resolved": queue_resolved,
+                        "resolution_type": row.get("resolution_type"),
+                        "recovered_units": int(row.get("recovered_units", 0)),
+                        "shrink_confirmed": shrink_confirmed or finalized,
+                    }
+                )
+        cards.append(
+            {
+                "container_id": flattop_id,
+                "manifest_instance_id": flattop_manifest_key(ft),
+                "status": container_status,
+                "zone": zone,
+                "sku_lines": sku_lines,
+            }
+        )
+    return cards
+
+
+def _shrink_unit_price_gbp(queue_row: dict, backend: dict | None) -> float:
+    """Retail £/unit for shrink math — queue price, backend, catalog, else default."""
+    queue_price = queue_row.get("price")
+    if queue_price is not None and float(queue_price) > 0:
+        return float(queue_price)
+    sku_view = backend or {}
+    price = sku_view.get("price")
+    if price is not None and float(price) > 0:
+        return float(price)
+    ean = str(queue_row.get("ean") or sku_view.get("ean") or "")
+    catalog_row = _CATALOG_ROW_BY_EAN.get(ean) if ean else None
+    if catalog_row:
+        return _catalog_unit_retail_gbp(catalog_row)
+    return _DEFAULT_SHRINK_UNIT_PRICE_GBP
+
+
+def _compute_total_missing_units_from_flattop_queue(
+    containers_overlay: dict | None = None,
+) -> int:
+    """Sum phantom_drift + unaccounted_variance across displayable queue SKUs."""
+    del containers_overlay
+    units, _ = compute_queue_at_risk_totals(st.session_state.get("flattops"))
+    return units
+
+
+def _compute_total_at_risk_cost_from_flattop_queue(
+    containers_overlay: dict | None = None,
+) -> float:
+    """Retail value of total missing units (same basis as Total Missing Units KPI)."""
+    del containers_overlay
+    _, cost = compute_queue_at_risk_totals(st.session_state.get("flattops"))
+    return cost
 
 
 def _is_total_power_cut_exception(exc: dict) -> bool:
@@ -404,158 +657,111 @@ def filter_containers_for_live_tabs(
     return filtered
 
 
+def _unit_retail_for_sku(sku: str, price_override: float | None = None) -> float:
+    if price_override is not None and float(price_override) > 0:
+        return round(float(price_override), 2)
+    lookup_ean = sku[4:] if str(sku).startswith("EAN-") and len(str(sku)) > 4 else ""
+    row = _CATALOG_ROW_BY_EAN.get(lookup_ean) if lookup_ean else None
+    if row:
+        return _catalog_unit_retail_gbp(row)
+    return 0.0
+
+
+def _confirmed_loss_units(sku_data: dict) -> int:
+    """Units written off as confirmed shrink (card + KPI routing)."""
+    shrink = int(sku_data.get("shrink_confirmed", 0))
+    if shrink > 0:
+        return shrink
+    expected = int(sku_data.get("expected", 0))
+    worked = int(sku_data.get("worked", 0))
+    backstock = int(sku_data.get("backstock", 0))
+    return max(0, expected - worked - backstock)
+
+
 def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
     """Recompute drift/task metrics from quarantined live containers only."""
     total_drift = 0
     total_shrink_cost = 0.0
-    pending_edge_tasks = 0
-
     for container in containers.values():
-        container_pending = False
         for sku in container.get("skus", []):
             drift = int(sku.get("drift", 0))
             total_drift += drift
             unit_price = float(sku.get("price") or 0.0)
             total_shrink_cost += drift * unit_price
-            if int(sku.get("variance", 0)) > 0 and not sku.get("is_resolved"):
-                container_pending = True
-        if container_pending:
-            pending_edge_tasks += 1
+
+    pending_edge_tasks = count_pending_edge_tasks_from_queue(
+        st.session_state.get("flattops")
+    )
+
+    waste_qty = int(base_metrics.get("daily_waste_qty") or 0)
+    waste_cost = float(base_metrics.get("daily_waste_cost") or 0.0)
 
     return {
         **base_metrics,
         "active_flattops": len(containers),
         "detected_phantom_drift": total_drift,
-        "daily_shrink_cost": total_shrink_cost,
+        "daily_waste_qty": waste_qty,
+        "daily_waste_cost": waste_cost,
+        "container_phantom_shrink_cost": total_shrink_cost,
+        "daily_shrink_cost": total_shrink_cost + waste_cost,
         "pending_edge_tasks": pending_edge_tasks,
     }
 
 
-def _is_offline_gap_exception(exc: dict) -> bool:
-    if exc.get("status") == "Gap Scan Recommended":
-        return True
-    message = (exc.get("message") or "").lower()
-    return "gap scan recommended" in message
-
-
-def _extract_offline_recovery_payload(payload: dict) -> tuple[list, list, list]:
-    """Offline recovery data only — kept separate from live flattop telemetry."""
-    offline_fill_audit = payload.get("offline_fill_audit", [])
-    inventory_gap_audit = payload.get("inventory_gap_audit", [])
-    offline_gap_exceptions = [
-        exc
-        for exc in payload.get("active_exceptions", [])
-        if _is_offline_gap_exception(exc)
-    ]
-    return offline_fill_audit, inventory_gap_audit, offline_gap_exceptions
-
-
-def _persist_dashboard_telemetry(payload: dict) -> None:
-    """Store latest telemetry in session so cards re-render with updated metrics."""
-    st.session_state[_DASHBOARD_CONTAINERS_KEY] = payload.get("containers", {})
-    st.session_state[_DASHBOARD_METRICS_KEY] = payload.get("metrics", {})
-    offline_fills, gap_audit, gap_exceptions = _extract_offline_recovery_payload(payload)
-    st.session_state[_DASHBOARD_OFFLINE_FILLS_KEY] = offline_fills
-    st.session_state[_DASHBOARD_INVENTORY_GAP_KEY] = gap_audit
-    st.session_state[_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY] = gap_exceptions
-    st.session_state[_DASHBOARD_ACTIVE_EXCEPTIONS_KEY] = payload.get("active_exceptions", [])
-    st.session_state[_DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY] = payload.get(
-        "manifest_auto_confirm_audit", []
-    )
-    st.session_state[_USE_CACHED_TELEMETRY_KEY] = True
-
-
-def _load_dashboard_telemetry_from_session() -> tuple[dict | None, dict | None]:
-    if not st.session_state.get(_USE_CACHED_TELEMETRY_KEY):
-        return None, None
-    st.session_state[_USE_CACHED_TELEMETRY_KEY] = False
-    return (
-        st.session_state.get(_DASHBOARD_CONTAINERS_KEY),
-        st.session_state.get(_DASHBOARD_METRICS_KEY),
-    )
-
-
-def submit_resolution(
-    container_id,
-    sku,
-    resolution_type,
-    recovered_units=0,
-    *,
-    partial_flag_key: str | None = None,
-):
-    """Submits a resolution event to the FastAPI backend."""
-    payload = {
-        "container_id": container_id,
-        "sku": sku,
-        "resolution_type": resolution_type,
-        "recovered_units": recovered_units
-    }
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/events/resolve",
-            json=payload,
-            headers={"X-API-Key": API_KEY},
-            timeout=3,
-        )
-        if response.status_code != 200:
-            st.error(f"Failed to submit resolution. Error {response.status_code}: {response.text}")
-            st.stop()
-        _persist_dashboard_telemetry(response.json())
-        if partial_flag_key is not None:
-            st.session_state[partial_flag_key] = False
-        st.rerun()
-    except requests.exceptions.Timeout:
-        st.warning(f"Backend API timed out while submitting resolution for container {container_id}.")
-        st.stop()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to submit resolution due to connection error: {e}")
-        st.stop()
-
 # Fetch data on load (prefer session cache immediately after control-deck actions)
 try:
-    cached_containers, cached_metrics = _load_dashboard_telemetry_from_session()
-    if cached_containers is not None:
-        containers = cached_containers
-        metrics = cached_metrics or {
-            "pending_delivery_cages": 0,
-            "active_flattops": 0,
-            "detected_phantom_drift": 0,
-            "daily_shrink_cost": 0.0,
-            "pending_edge_tasks": 0,
-        }
-        offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
-        inventory_gap_audit = st.session_state.get(_DASHBOARD_INVENTORY_GAP_KEY, [])
-        offline_gap_exceptions = st.session_state.get(_DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY, [])
-        active_exceptions = st.session_state.get(_DASHBOARD_ACTIVE_EXCEPTIONS_KEY, [])
-        manifest_auto_confirm_audit = st.session_state.get(
-            _DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY, []
-        )
+    if st.session_state.get(_DASHBOARD_FORCE_EMPTY_TELEMETRY_KEY):
+        containers = {}
+        metrics = _empty_overview_metrics()
+        offline_fill_audit = []
+        inventory_gap_audit = []
+        offline_gap_exceptions = []
+        active_exceptions = []
+        manifest_auto_confirm_audit = []
     else:
-        telemetry_data = fetch_telemetry()
-
-        if telemetry_data and "metrics" in telemetry_data and "pending_delivery_cages" in telemetry_data["metrics"]:
-            metrics = telemetry_data["metrics"]
-            containers = telemetry_data.get("containers", {})
-            active_exceptions = telemetry_data.get("active_exceptions", [])
-            manifest_auto_confirm_audit = telemetry_data.get("manifest_auto_confirm_audit", [])
-            offline_fill_audit, inventory_gap_audit, offline_gap_exceptions = (
-                _extract_offline_recovery_payload(telemetry_data)
+        cached_containers, cached_metrics = _load_dashboard_telemetry_from_session()
+        if cached_containers is not None:
+            containers = cached_containers
+            metrics = cached_metrics or _empty_overview_metrics()
+            offline_fill_audit = st.session_state.get(_DASHBOARD_OFFLINE_FILLS_KEY, [])
+            inventory_gap_audit = st.session_state.get(_DASHBOARD_INVENTORY_GAP_KEY, [])
+            offline_gap_exceptions = st.session_state.get(
+                _DASHBOARD_OFFLINE_GAP_EXCEPTIONS_KEY, []
+            )
+            active_exceptions = st.session_state.get(_DASHBOARD_ACTIVE_EXCEPTIONS_KEY, [])
+            manifest_auto_confirm_audit = st.session_state.get(
+                _DASHBOARD_MANIFEST_AUTO_CONFIRM_KEY, []
             )
         else:
-            st.warning("Backend API connected, but returned incomplete data. Using fallback empty state.")
-            metrics = {
-                "pending_delivery_cages": 0,
-                "active_flattops": 0,
-                "detected_phantom_drift": 0,
-                "daily_shrink_cost": 0.0,
-                "pending_edge_tasks": 0
-            }
-            containers = {}
-            offline_fill_audit = []
-            inventory_gap_audit = []
-            offline_gap_exceptions = []
-            active_exceptions = []
-            manifest_auto_confirm_audit = []
+            telemetry_data = fetch_telemetry()
+
+            if (
+                telemetry_data
+                and "metrics" in telemetry_data
+                and "pending_delivery_cages" in telemetry_data["metrics"]
+            ):
+                metrics = telemetry_data["metrics"]
+                containers = telemetry_data.get("containers", {})
+                active_exceptions = telemetry_data.get("active_exceptions", [])
+                manifest_auto_confirm_audit = telemetry_data.get(
+                    "manifest_auto_confirm_audit", []
+                )
+                offline_fill_audit, inventory_gap_audit, offline_gap_exceptions = (
+                    _extract_offline_recovery_payload(telemetry_data)
+                )
+            else:
+                st.warning(
+                    "Backend API connected, but returned incomplete data. Using fallback empty state."
+                )
+                metrics = _empty_overview_metrics()
+                containers = {}
+                offline_fill_audit = []
+                inventory_gap_audit = []
+                offline_gap_exceptions = []
+                active_exceptions = []
+                manifest_auto_confirm_audit = []
+
+        metrics = _merge_backend_waste_metrics(metrics)
 
     st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
     st.session_state[_DASHBOARD_METRICS_KEY] = metrics
@@ -570,24 +776,72 @@ except Exception as e:
 
 live_containers = filter_containers_for_live_tabs(containers, active_exceptions)
 live_metrics = derive_live_overview_metrics(live_containers, metrics)
+_sync_kpi_session_state(metrics)
+
+_display_phantom_drift = _compute_total_missing_units_from_flattop_queue(
+    live_containers
+)
+_display_pending_edge_tasks = int(live_metrics["pending_edge_tasks"])
+current_total_shrink_cost = _compute_total_at_risk_cost_from_flattop_queue(
+    live_containers
+)
 
 # ---------------------------------------------------------
 # Top Header Section: Global Metrics
 # ---------------------------------------------------------
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 with col1:
     st.metric(label="Pending Delivery Cages", value=live_metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
 with col2:
-    st.metric(label="Active Flattops", value=live_metrics["active_flattops"], delta="Live Manifests", delta_color="off")
+    st.metric(
+        label="Active Flattops",
+        value=_active_flattop_count(),
+        delta="Live Manifests",
+        delta_color="off",
+    )
 with col3:
-    st.metric(label="Detected Phantom Drift Units", value=live_metrics["detected_phantom_drift"], delta="Shrink Risk", delta_color="inverse")
+    st.metric(
+        label="Total Missing Units",
+        value=_display_phantom_drift,
+        delta="Unconfirmed + Confirmed",
+        delta_color="inverse",
+    )
 with col4:
-    st.metric(label="Daily Shrink Cost", value=f"£{live_metrics['daily_shrink_cost']:,.2f}", delta="Revenue Lost", delta_color="inverse")
+    st.metric(
+        label="Total At-Risk Cost",
+        value=f"£{current_total_shrink_cost:.2f}",
+        delta="Retail Exposure",
+        delta_color="inverse",
+    )
 with col5:
-    if live_metrics["pending_edge_tasks"] > 0:
-        st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="Action Required", delta_color="inverse")
+    if _display_pending_edge_tasks > 0:
+        st.metric(
+            label="Pending Edge Tasks",
+            value=_display_pending_edge_tasks,
+            delta="Action Required",
+            delta_color="inverse",
+        )
     else:
-        st.metric(label="Pending Edge Tasks", value=live_metrics["pending_edge_tasks"], delta="All Tasks Cleared", delta_color="normal")
+        st.metric(
+            label="Pending Edge Tasks",
+            value=_display_pending_edge_tasks,
+            delta="All Tasks Cleared",
+            delta_color="normal",
+        )
+with col6:
+    st.metric(
+        label="Daily Waste QTY",
+        value=st.session_state.daily_waste_qty,
+        delta="↑ Scenario A Write-offs",
+        delta_color="inverse",
+    )
+with col7:
+    st.metric(
+        label="Daily Waste Cost",
+        value=f"£{st.session_state.daily_waste_cost:.2f}",
+        delta="↑ Known Margin Lost",
+        delta_color="inverse",
+    )
 
 telemetry_rows = []
 for container_id, container in live_containers.items():
@@ -606,23 +860,483 @@ for container_id, container in live_containers.items():
             }
         )
 
-FLATTOP_CARD_CONTAINER_KWARGS = {"border": True, "width": "stretch"}
+def _coerce_single_ean_string(raw: str | list | tuple | None) -> str:
+    """Normalize any ean field to one string (first list element or first token only)."""
+    if raw is None:
+        return ""
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return ""
+        return str(raw[0]).strip()
+    text = str(raw).strip()
+    if not text:
+        return ""
+    return text.replace(",", " ").split()[0].strip()
 
-OFFLINE_CASE_EXPECTED_UNITS = {
-    OFFLINE_FILL_AUDIT_SKU: OFFLINE_FILL_AUDIT_QUANTITY,
-    "RICE-CASE-6": 6,
+
+def _first_ean_from_sku_record(sku_data: dict) -> str:
+    """Single identifier: `ean` field only, else barcode embedded in EAN- SKU alias."""
+    ean = _coerce_single_ean_string(sku_data.get("ean"))
+    if ean:
+        return ean
+    sku_str = str(sku_data.get("sku") or "").strip()
+    if sku_str.upper().startswith("EAN-") and len(sku_str) > 4:
+        return sku_str[4:].strip()
+    return ""
+
+
+def _normalize_sku_profile_record(
+    sku_data: dict | None,
+    *,
+    name: str = "",
+    sku: str = "",
+    ean: str | list | tuple | None = None,
+) -> dict:
+    """View model for SKU profile row — one sku code, one ean string, no list fields."""
+    record = dict(sku_data) if sku_data is not None else {}
+    if sku:
+        record.setdefault("sku", sku)
+    if name:
+        record.setdefault("name", name)
+    if ean is not None and "ean" not in record:
+        record["ean"] = ean
+    record["ean"] = _first_ean_from_sku_record(record)
+    return record
+
+
+def _sku_pill_duplicates_ean_pill(display_sku: str, ean_display: str) -> bool:
+    """True when the SKU pill would repeat the same barcode as the EAN pill."""
+    sku_str = display_sku.strip()
+    ean_str = ean_display.strip()
+    if not sku_str or not ean_str or ean_str == "—":
+        return False
+    if sku_str.upper().startswith("EAN-") and sku_str[4:].strip() == ean_str:
+        return True
+    return sku_str == ean_str
+
+
+def render_execution_sku_profile(
+    name: str,
+    sku: str,
+    ean: str | list | tuple | None = "",
+    *,
+    sku_data: dict | None = None,
+) -> None:
+    """SKU profile row shared by live execution cards and offline review cards."""
+    record = _normalize_sku_profile_record(
+        sku_data, name=name, sku=sku, ean=ean if sku_data is None else None
+    )
+    display_name = str(record.get("name") or name)
+    display_sku = str(record.get("sku") or sku)
+    ean_display = record.get("ean") or "—"
+    sku_pill_html = ""
+    if display_sku and not _sku_pill_duplicates_ean_pill(display_sku, ean_display):
+        sku_pill_html = (
+            f'<span class="exec-pill exec-pill-sku">{html.escape(display_sku)}</span>'
+        )
+    # Exactly one EAN badge element for this profile line.
+    ean_pill_html = (
+        f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>'
+    )
+    st.markdown(
+        f"**SKU Profile:** {html.escape(display_name)}  \n"
+        f"{sku_pill_html}{ean_pill_html}",
+        unsafe_allow_html=True,
+    )
+
+
+def _unaccounted_variance_value(sku_data: dict) -> int:
+    if "unaccounted_variance" in sku_data:
+        return max(0, int(sku_data["unaccounted_variance"]))
+    if sku_data.get("is_resolved"):
+        return 0
+    expected = int(sku_data.get("expected", 0))
+    worked = int(sku_data.get("worked", 0))
+    backstock = int(sku_data.get("backstock", 0))
+    return max(0, expected - worked - backstock)
+
+
+def render_unaccounted_variance_metric(
+    sku_data: dict,
+    *,
+    delta: str | None = None,
+    delta_color: str = "normal",
+) -> None:
+    metric_kwargs = {"label": "Unaccounted Variance", "value": _unaccounted_variance_value(sku_data)}
+    if delta is not None:
+        metric_kwargs["delta"] = delta
+        metric_kwargs["delta_color"] = delta_color
+    st.metric(**metric_kwargs)
+
+
+def _sku_widget_slug(sku: str) -> str:
+    return sku.replace("-", "_").lower()
+
+
+def _manifest_widget_slug(manifest_key: str) -> str:
+    """Stable Streamlit key segment — instance ids contain '#' which must not collide across cards."""
+    return (
+        str(manifest_key)
+        .strip()
+        .lower()
+        .replace("#", "_inst_")
+        .replace(" ", "")
+    )
+
+
+def _operational_widget_key(
+    action: str,
+    manifest_key: str,
+    sku: str,
+    *,
+    ean: str = "",
+    widget_index: int | str | None = None,
+) -> str:
+    manifest_slug = _manifest_widget_slug(manifest_key)
+    ean_slug = (ean or "noean").replace(" ", "")
+    sku_slug = _sku_widget_slug(sku)
+    stable_id = uuid5(
+        NAMESPACE_DNS,
+        f"{manifest_key}|{sku}|{action}|{widget_index or ''}|{ean_slug}",
+    ).hex[:12]
+    fleet_slug = fleet_id_from_container_ref(manifest_key).lower()
+    return f"btn_{action}_{fleet_slug}_{manifest_slug}_{sku_slug}_{stable_id}"
+
+
+_RESOLUTION_ACTION_TO_API: dict[str, str] = {
+    "all_found": "all",
+    "not_present": "none",
+    "partial": "partial",
 }
 
 
-def render_execution_sku_profile(name: str, sku: str, ean: str = "") -> None:
-    """SKU profile row shared by live execution cards and offline review cards."""
-    ean_display = ean or "—"
-    st.markdown(
-        f"**SKU Profile:** {html.escape(name)}  \n"
-        f'<span class="exec-pill exec-pill-sku">{html.escape(sku)}</span>'
-        f'<span class="exec-pill exec-pill-ean">EAN {html.escape(ean_display)}</span>',
-        unsafe_allow_html=True,
+def _submit_resolution_action(
+    *,
+    action: str,
+    fleet_id: str,
+    sku: str,
+    manifest_instance_id: str,
+    partial_flag_key: str,
+    partial_qty_key: str | None = None,
+) -> None:
+    """Single on_click entry — action string selects queue/API routing (no shared callbacks)."""
+    resolution_type = _RESOLUTION_ACTION_TO_API.get(str(action).strip())
+    if resolution_type is None:
+        st.error(f"Unknown resolution action: {action!r}")
+        st.stop()
+    recovered_units = 0
+    if action == "partial":
+        qty_key = partial_qty_key or ""
+        if not qty_key:
+            st.error("Partial resolution is missing its quantity widget key.")
+            st.stop()
+        recovered_units = int(st.session_state.get(qty_key, 1))
+    submit_resolution(
+        fleet_id,
+        sku,
+        resolution_type,
+        recovered_units,
+        manifest_instance_id=manifest_instance_id,
+        partial_flag_key=partial_flag_key,
     )
+
+
+def _outstanding_units(sku_data: dict) -> int:
+    return _unaccounted_variance_value(sku_data)
+
+
+def _requires_operational_control_deck(sku_data: dict) -> bool:
+    if sku_data.get("is_resolved"):
+        return False
+    return _unaccounted_variance_value(sku_data) > 0
+
+
+def _container_view_from_task(task: dict) -> dict:
+    return {
+        "id": task["container_id"],
+        "status": task["status"],
+        "zone": task["zone"],
+    }
+
+
+def _sku_view_from_task(task: dict) -> dict:
+    container_fields = {"container_id", "status", "zone"}
+    return {key: value for key, value in task.items() if key not in container_fields}
+
+
+def render_operational_control_deck(
+    container_data,
+    sku_data,
+    *,
+    widget_index: int | str | None = None,
+) -> None:
+    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
+    if not _requires_operational_control_deck(sku_data):
+        return
+
+    manifest_key = str(container_data["id"])
+    fleet_id = fleet_id_from_container_ref(container_data)
+    sku = sku_data["sku"]
+    ean = str(sku_data.get("ean") or "")
+    units = _outstanding_units(sku_data)
+    key_kwargs = {"ean": ean, "widget_index": widget_index}
+    partial_flag = _operational_widget_key(
+        "show_partial", manifest_key, sku, **key_kwargs
+    )
+
+    if partial_flag not in st.session_state:
+        st.session_state[partial_flag] = False
+
+    all_found_key = _operational_widget_key("all_found", manifest_key, sku, **key_kwargs)
+    not_present_key = _operational_widget_key(
+        "not_present", manifest_key, sku, **key_kwargs
+    )
+    partial_toggle_key = _operational_widget_key("partial", manifest_key, sku, **key_kwargs)
+    partial_qty_key = _operational_widget_key(
+        "partial_qty", manifest_key, sku, **key_kwargs
+    )
+    confirm_partial_key = _operational_widget_key(
+        "confirm_partial", manifest_key, sku, **key_kwargs
+    )
+    resolution_base = {
+        "fleet_id": fleet_id,
+        "sku": sku,
+        "manifest_instance_id": manifest_key,
+        "partial_flag_key": partial_flag,
+    }
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    ctrl_cols = st.columns(3)
+    with ctrl_cols[0]:
+        st.button(
+            f"All Found ({units})",
+            key=all_found_key,
+            use_container_width=True,
+            on_click=_submit_resolution_action,
+            kwargs=copy.deepcopy({**resolution_base, "action": "all_found"}),
+        )
+
+    with ctrl_cols[1]:
+        st.button(
+            "Not Present (0)",
+            key=not_present_key,
+            use_container_width=True,
+            on_click=_submit_resolution_action,
+            kwargs=copy.deepcopy({**resolution_base, "action": "not_present"}),
+        )
+
+    with ctrl_cols[2]:
+        if st.button(
+            f"Partial ({units})",
+            key=partial_toggle_key,
+            use_container_width=True,
+        ):
+            st.session_state[partial_flag] = not st.session_state[partial_flag]
+
+    if st.session_state.get(partial_flag, False):
+        st.warning("Partial recovery in progress — enter quantity recovered below.")
+        partial_col1, partial_col2 = st.columns([2, 1])
+        with partial_col1:
+            max_partial = max(1, units - 1) if units > 1 else 1
+            st.number_input(
+                "Quantity Recovered?",
+                min_value=1,
+                max_value=max_partial,
+                value=1,
+                key=partial_qty_key,
+            )
+        with partial_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.button(
+                "Confirm Partial",
+                type="primary",
+                key=confirm_partial_key,
+                on_click=_submit_resolution_action,
+                kwargs=copy.deepcopy(
+                    {
+                        **resolution_base,
+                        "action": "partial",
+                        "partial_qty_key": partial_qty_key,
+                    }
+                ),
+            )
+
+
+def _render_execution_telemetry_sku_block(
+    container_data: dict,
+    sku_data: dict,
+    *,
+    line_index: int | None = None,
+    line_total: int | None = None,
+    widget_index: int | str | None = None,
+) -> None:
+    product_name = sku_data.get("name", sku_data["sku"])
+    if line_index is not None and line_total is not None:
+        st.caption(f"SKU line {line_index} of {line_total} on this flattop")
+    render_execution_sku_profile(product_name, sku_data["sku"], sku_data=sku_data)
+
+    metrics_left, metrics_right = st.columns(2)
+    with metrics_left:
+        st.metric("Expected Quantity", sku_data["expected"])
+        st.metric("Sent to Backstock", sku_data.get("backstock", 0))
+    with metrics_right:
+        st.metric("Worked to Shelf", sku_data["worked"])
+        st.metric("Phantom Drift", sku_data["drift"])
+
+    render_unaccounted_variance_metric(sku_data)
+
+    if sku_data.get("is_resolved"):
+        if sku_data.get("resolution_type") == "all":
+            st.success("✅ **Resolved:** All units recovered and accounted for.")
+        elif sku_data.get("resolution_type") == "none":
+            st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
+        elif sku_data.get("resolution_type") == "partial":
+            st.warning(
+                f"⚠️ **Partial Resolution:** {sku_data.get('recovered_units')} found, "
+                f"{sku_data.get('shrink_confirmed')} confirmed as shrink."
+            )
+    else:
+        unaccounted = _unaccounted_variance_value(sku_data)
+        if unaccounted > 0:
+            st.warning(
+                f"⚠️ **UNACCOUNTED VARIANCE:** {unaccounted} units of "
+                f"'{product_name}' are missing and need to be verified on the floor."
+            )
+        else:
+            st.success(
+                "✅ **Fully accounted:** Case split matches telemetry "
+                f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
+            )
+        if _requires_operational_control_deck(sku_data):
+            render_operational_control_deck(
+                container_data, sku_data, widget_index=widget_index
+            )
+
+
+def _session_flattop_by_manifest(manifest_key: str) -> dict | None:
+    for ft in st.session_state.get("flattops") or []:
+        if flattop_manifest_key(ft) == manifest_key:
+            return ft
+    return None
+
+
+def _partition_flattop_cards_for_overview(
+    cards: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Live on-board manifests vs backlog (resolved historical and archived rows)."""
+    injected: list[dict] = []
+    baseline: list[dict] = []
+    for card in cards:
+        fleet_id = card["container_id"]
+        ft = _session_flattop_by_manifest(
+            card.get("manifest_instance_id") or fleet_id
+        )
+        if ft is not None and fleet_slot_occupied_by_queue_entry(ft):
+            injected.append(card)
+        else:
+            baseline.append(card)
+    return injected, baseline
+
+
+def _flattop_card_fleet_sort_key(card: dict) -> tuple[str, str]:
+    """Ascending FT-0x layout; tie-break by manifest instance for multiple historical rows."""
+    fleet = fleet_id_from_container_ref(
+        card.get("container_id") or card.get("manifest_instance_id") or ""
+    )
+    manifest = str(card.get("manifest_instance_id") or "")
+    return (fleet, manifest)
+
+
+def _sort_flattop_cards_by_fleet_id(cards: list[dict]) -> list[dict]:
+    return sorted(cards, key=_flattop_card_fleet_sort_key)
+
+
+def _render_flattop_card_grid(
+    cards: list[dict], *, card_index_offset: int = 0
+) -> None:
+    if not cards:
+        return
+    cards = _sort_flattop_cards_by_fleet_id(cards)
+    grid = st.columns(3)
+    for index, flattop_card in enumerate(cards):
+        with grid[index % 3]:
+            render_flattop_execution_telemetry_card(
+                flattop_card, card_index=card_index_offset + index
+            )
+
+
+def render_flattop_execution_telemetry_card(
+    flattop_card: dict, *, card_index: int | str
+) -> None:
+    """Multi-SKU flattop card — one audited line per product on the display."""
+    fleet_id = flattop_card["container_id"]
+    manifest_key = flattop_card.get("manifest_instance_id") or fleet_id
+    container_data = {
+        # Streamlit widget keys must use the instance id (multiple FT-0x historical rows).
+        "id": manifest_key,
+        "fleet_id": fleet_id,
+        "status": flattop_card["status"],
+        "zone": flattop_card["zone"],
+    }
+    sku_lines: list[dict] = flattop_card.get("sku_lines") or []
+    line_total = len(sku_lines)
+
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.subheader(f"Execution Telemetry: {fleet_id}")
+        short_id = compact_instance_id_for_display(str(manifest_key))
+        if short_id:
+            st.markdown(
+                f'<span class="exec-pill exec-pill-instance-id">ID: {html.escape(short_id)}</span>',
+                unsafe_allow_html=True,
+            )
+        if container_data["status"] == md.FLATTOP_STATUS_RESOLVED_HISTORICAL:
+            st.caption("Resolved historical manifest — read-only audit trail.")
+        st.caption(
+            f"Last Known State: {container_data['status']} | Zone: {container_data['zone']} | "
+            f"{line_total} SKU{'s' if line_total != 1 else ''} on display"
+        )
+        for index, sku_data in enumerate(sku_lines, start=1):
+            if index > 1:
+                st.markdown("---")
+            _render_execution_telemetry_sku_block(
+                container_data,
+                sku_data,
+                line_index=index,
+                line_total=line_total,
+                widget_index=f"{manifest_key}_{card_index}_{index}",
+            )
+
+
+def render_execution_telemetry_card(
+    task: dict, *, widget_index: int | str | None = None
+) -> None:
+    """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
+    container_data = _container_view_from_task(task)
+    sku_data = _sku_view_from_task(task)
+
+    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
+        st.subheader(f"Execution Telemetry: {container_data['id']}")
+        st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
+        st.markdown("---")
+        _render_execution_telemetry_sku_block(
+            container_data, sku_data, widget_index=widget_index
+        )
+
+
+def build_tasks(containers_dict: dict) -> list[dict]:
+    """One task dict per container SKU line for the strict execution telemetry template."""
+    tasks: list[dict] = []
+    for container_id, container in containers_dict.items():
+        for sku_data in container.get("skus", []):
+            tasks.append(
+                {
+                    "container_id": container.get("id", container_id),
+                    "status": container.get("status", ""),
+                    "zone": container.get("zone", ""),
+                    **sku_data,
+                }
+            )
+    return tasks
 
 
 def _execution_status_pill_class(status: str) -> str:
@@ -746,7 +1460,7 @@ def render_offline_review_card(card: dict) -> None:
         subtitle_parts.append(card.get("action_status", ""))
         st.caption(" | ".join(part for part in subtitle_parts if part))
 
-        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_sku_profile(product_name, card["sku"], sku_data=card)
         render_execution_status_pill(status, _offline_status_pill_label(status))
 
         metrics_left, metrics_right = st.columns(2)
@@ -837,7 +1551,7 @@ def render_power_cut_recovery_card(card: dict) -> None:
         if subtitle_parts:
             st.caption(" | ".join(subtitle_parts))
 
-        render_execution_sku_profile(product_name, card["sku"], card.get("ean", ""))
+        render_execution_sku_profile(product_name, card["sku"], sku_data=card)
         render_execution_status_pill(
             TOTAL_POWER_CUT_STATUS,
             TOTAL_POWER_CUT_STATUS,
@@ -950,23 +1664,50 @@ def _count_pending_offline_scans(db_path: str | Path) -> int:
 if _DASHBOARD_ACTIVE_TAB_KEY not in st.session_state:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(DASHBOARD_TABS)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(DASHBOARD_TABS)
 
 with tab1:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
-    st.markdown(
-        "High-level operational charts and trend summaries will appear here. "
-        "Use the flattop execution cards below for live reconciliation workflows."
+    _all_flattop_cards = _build_flattop_cards_from_queue(live_containers)
+    _injected_cards, _baseline_cards = _partition_flattop_cards_for_overview(
+        _all_flattop_cards
+    )
+
+    st.subheader("Injected Scenarios")
+    st.info(
+        "Live flattop execution telemetry — Scenario B: Abandoned Flattop injections."
+    )
+    if _injected_cards:
+        _render_flattop_card_grid(_injected_cards, card_index_offset=0)
+    else:
+        st.caption(
+            "No injected flattops yet. Use **Shopfloor Scenarios → Scenario B: Abandoned Flattop**."
+        )
+
+    st.divider()
+    st.subheader("Baseline Backlog")
+    st.caption(
+        "Baseline mock backlog (FT-02, FT-03, FT-04) plus resolved historical Scenario B manifests."
+    )
+    _render_flattop_card_grid(
+        _baseline_cards, card_index_offset=len(_injected_cards)
     )
 
 with tab2:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_TELEMETRY
     st.subheader("Live Execution Telemetry")
+    _telemetry_columns = ["SKU", "Name", "EAN", "Location", "Drift"]
     telemetry_df = pd.DataFrame(telemetry_rows)
-    telemetry_df = telemetry_df[telemetry_df["Drift"] != 0].sort_values(
-        "Drift", ascending=False
-    )
-    st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
+    if telemetry_df.empty:
+        telemetry_df = pd.DataFrame(columns=_telemetry_columns)
+    elif "Drift" in telemetry_df.columns:
+        telemetry_df = telemetry_df[telemetry_df["Drift"] != 0].sort_values(
+            "Drift", ascending=False
+        )
+    if telemetry_df.empty:
+        st.info("No telemetry data available.")
+    else:
+        st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
 with tab3:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_OFFLINE_FILL
@@ -1196,7 +1937,7 @@ with tab5:
         else:
             st.warning(
                 "Unable to reach bouncer health endpoint. Ensure the FastAPI backend is running "
-                "and `API_BASE_URL` resolves (Docker: `http://backend:8000/api/v1`)."
+                "and `API_BASE_URL` resolves (Docker Compose sets this to the backend service)."
             )
 
         st.divider()
@@ -1212,6 +1953,9 @@ with tab5:
 
         st.divider()
         st.markdown("#### Live Reconciliation Log")
+        if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
+            if handle_purge_reconciliation_log():
+                st.rerun()
         if reconciliations:
             render_bouncer_reconciliation_dashboard(reconciliations)
         else:
@@ -1225,203 +1969,104 @@ with tab5:
             "and throttle limits from the FastAPI middleware."
         )
 
-st.divider()
+with tab6:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SHOPFLOOR_SCENARIOS
+    st.subheader("Shopfloor Scenarios — Manual Edge Injection")
+    st.caption(
+        "Inject retail edge scenarios into the API Bouncer reconciliation log. "
+        "Spline 3D state is prepared on each successful inject (no visual embed yet)."
+    )
 
-# ---------------------------------------------------------
-# Main Content Sections
-# ---------------------------------------------------------
-def _unaccounted_variance_value(sku_data: dict) -> int:
-    if sku_data.get("is_resolved"):
-        return 0
-    return int(sku_data.get("variance", 0))
+    scenario_choice = st.radio(
+        "Select scenario to inject",
+        [
+            "Scenario A: Shelf Damage (Torn Multipack)",
+            "Scenario B: Abandoned Flattop",
+        ],
+        key="shopfloor_scenario_choice",
+    )
 
+    if scenario_choice.startswith("Scenario A"):
+        st.markdown("#### Shelf Damage (Torn Multipack)")
+        if "scenario_a_max_capacity" not in st.session_state:
+            _default_shelf = _SHELF_PRODUCT_NAMES[0]
+            st.session_state.scenario_a_max_capacity = _shelf_sku_max_capacity(_default_shelf)
+        if "filled_qty" not in st.session_state:
+            st.session_state.filled_qty = st.session_state.scenario_a_max_capacity
+        if "damaged_qty" not in st.session_state:
+            st.session_state.damaged_qty = 0
 
-def render_unaccounted_variance_metric(
-    sku_data: dict,
-    *,
-    delta: str | None = None,
-    delta_color: str = "normal",
-) -> None:
-    metric_kwargs = {"label": "Unaccounted Variance", "value": _unaccounted_variance_value(sku_data)}
-    if delta is not None:
-        metric_kwargs["delta"] = delta
-        metric_kwargs["delta_color"] = delta_color
-    st.metric(**metric_kwargs)
+        st.selectbox(
+            "Shelf SKU",
+            _SHELF_PRODUCT_NAMES,
+            key="shopfloor_a_sku",
+            on_change=_sync_scenario_a_on_sku_change,
+        )
+        shelf_name = st.session_state.shopfloor_a_sku
+        shelf_row = _CATALOG_BY_NAME[shelf_name]
+        max_capacity = _shelf_sku_max_capacity(shelf_name)
+        st.session_state.scenario_a_max_capacity = max_capacity
 
-
-def _sku_widget_slug(sku: str) -> str:
-    return sku.replace("-", "_").lower()
-
-
-def _operational_widget_key(action: str, container_id: str, sku: str) -> str:
-    return f"{action}_{container_id}_{_sku_widget_slug(sku)}".lower()
-
-
-def _outstanding_units(sku_data: dict) -> int:
-    return max(int(sku_data.get("drift", 0)), int(sku_data.get("variance", 0)))
-
-
-def _requires_operational_control_deck(sku_data: dict) -> bool:
-    """True when the SKU still has phantom drift or unaccounted variance to resolve."""
-    if sku_data.get("is_resolved"):
-        return False
-    return int(sku_data.get("drift", 0)) > 0 or int(sku_data.get("variance", 0)) > 0
-
-
-def _container_view_from_task(task: dict) -> dict:
-    return {
-        "id": task["container_id"],
-        "status": task["status"],
-        "zone": task["zone"],
-    }
-
-
-def _sku_view_from_task(task: dict) -> dict:
-    container_fields = {"container_id", "status", "zone"}
-    return {key: value for key, value in task.items() if key not in container_fields}
-
-
-def render_operational_control_deck(container_data, sku_data) -> None:
-    """Three-button control deck (All Found / Not Present / Partial) for any flattop SKU."""
-    if not _requires_operational_control_deck(sku_data):
-        return
-
-    container_id = container_data["id"]
-    sku = sku_data["sku"]
-    units = _outstanding_units(sku_data)
-    partial_flag = _operational_widget_key("show_partial", container_id, sku)
-
-    if partial_flag not in st.session_state:
-        st.session_state[partial_flag] = False
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    ctrl_cols = st.columns(3)
-    with ctrl_cols[0]:
-        if st.button(
-            f"All Found ({units})",
-            key=_operational_widget_key("all_found", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "all", units, partial_flag_key=partial_flag)
-
-    with ctrl_cols[1]:
-        if st.button(
-            "Not Present (0)",
-            key=_operational_widget_key("not_present", container_id, sku),
-            use_container_width=True,
-        ):
-            submit_resolution(container_id, sku, "none", 0, partial_flag_key=partial_flag)
-
-    with ctrl_cols[2]:
-        if st.button(
-            f"Partial ({units})",
-            key=_operational_widget_key("partial", container_id, sku),
-            use_container_width=True,
-        ):
-            st.session_state[partial_flag] = not st.session_state[partial_flag]
-
-    if st.session_state.get(partial_flag, False):
-        st.warning("Partial recovery in progress — enter quantity recovered below.")
-        partial_col1, partial_col2 = st.columns([2, 1])
-        with partial_col1:
-            max_partial = max(1, units - 1) if units > 1 else 1
-            partial_qty = st.number_input(
-                "Quantity Recovered?",
-                min_value=1,
-                max_value=max_partial,
-                value=1,
-                key=_operational_widget_key("partial_qty", container_id, sku),
+        fill_col, dmg_col = st.columns(2)
+        with fill_col:
+            st.number_input(
+                "Total Units Filled",
+                min_value=0,
+                max_value=max_capacity,
+                key="filled_qty",
+                on_change=_scenario_a_update_fill,
             )
-        with partial_col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
-                "Confirm Partial",
-                type="primary",
-                key=_operational_widget_key("confirm_partial", container_id, sku),
-            ):
-                submit_resolution(
-                    container_id,
-                    sku,
-                    "partial",
-                    partial_qty,
-                    partial_flag_key=partial_flag,
-                )
-
-
-def build_tasks(containers_dict: dict) -> list[dict]:
-    """One task dict per container SKU line for the strict execution telemetry template."""
-    tasks: list[dict] = []
-    for container_id, container in containers_dict.items():
-        for sku_data in container.get("skus", []):
-            tasks.append(
-                {
-                    "container_id": container.get("id", container_id),
-                    "status": container.get("status", ""),
-                    "zone": container.get("zone", ""),
-                    **sku_data,
-                }
+        with dmg_col:
+            st.number_input(
+                "Damages Detected",
+                min_value=0,
+                max_value=max_capacity,
+                key="damaged_qty",
+                on_change=_scenario_a_update_damage,
             )
-    return tasks
-
-
-def render_execution_telemetry_card(task: dict) -> None:
-    """Strict FT-02-style template: metrics, variance alerts, and 3-column control deck."""
-    container_data = _container_view_from_task(task)
-    sku_data = _sku_view_from_task(task)
-    product_name = sku_data.get("name", sku_data["sku"])
-
-    with st.container(**FLATTOP_CARD_CONTAINER_KWARGS):
-        st.subheader(f"Execution Telemetry: {container_data['id']}")
-        st.caption(f"Last Known State: {container_data['status']} | Zone: {container_data['zone']}")
-        render_execution_sku_profile(product_name, sku_data["sku"], sku_data.get("ean", ""))
-
-        metrics_left, metrics_right = st.columns(2)
-        with metrics_left:
-            st.metric("Expected Quantity", sku_data["expected"])
-            st.metric("Sent to Backstock", sku_data.get("backstock", 0))
-        with metrics_right:
-            st.metric("Worked to Shelf", sku_data["worked"])
-            st.metric("Phantom Drift", sku_data["drift"])
-
-        st.markdown("---")
-        render_unaccounted_variance_metric(sku_data)
-
-        if sku_data["is_resolved"]:
-            if sku_data["resolution_type"] == "all":
-                st.success("✅ **Resolved:** All units recovered and accounted for.")
-            elif sku_data["resolution_type"] == "none":
-                st.error("🚨 **Shrink Confirmed:** Units officially lost/unaccounted.")
-            elif sku_data["resolution_type"] == "partial":
-                st.warning(
-                    f"⚠️ **Partial Resolution:** {sku_data['recovered_units']} found, "
-                    f"{sku_data['shrink_confirmed']} confirmed as shrink."
-                )
-        else:
-            if sku_data["drift"] > 0:
-                st.warning(
-                    f"⚠️ **PHANTOM DRIFT:** {sku_data['drift']} units of "
-                    f"'{product_name}' are missing and completely unaccounted for in system telemetry."
-                )
-            elif sku_data.get("variance", 0) > 0:
-                st.warning(
-                    f"⚠️ **ACTION REQUIRED:** {sku_data['variance']} units unaccounted for. "
-                    "System suspects untracked backstock routing."
-                )
+        if st.button("Inject Scenario A", key="shopfloor_inject_a"):
+            response, trx_id = inject_custom_payload(
+                ean=shelf_row["ean"],
+                product_name=shelf_name,
+                exception_type="TORN_MULTIPACK",
+                total_units=int(st.session_state.filled_qty),
+                damaged_units=int(st.session_state.damaged_qty),
+                fixture_id="CAM-AISLE-04",
+            )
+            if response.status_code == 200:
+                st.session_state.active_ean = [shelf_row["ean"]]
+                st.session_state.fixture_type = ["SHELF"]
+                st.session_state.sku_alert = 1
+                st.toast(f"✅ Injected {trx_id} — shelf damage recorded.")
             else:
-                st.success(
-                    "✅ **Fully accounted:** Case split matches telemetry "
-                    f"({sku_data['worked']} shelf / {sku_data.get('backstock', 0)} backstock)."
-                )
-            if _requires_operational_control_deck(sku_data):
-                render_operational_control_deck(container_data, sku_data)
+                st.error(f"Inject failed ({response.status_code}): {response.text}")
 
-
-tasks = build_tasks(live_containers)
-
-# Create a 3-column grid for a more compact dashboard layout
-grid_cols = st.columns(3)
-
-for index, task in enumerate(tasks):
-    # Alternate cards across the 3 columns
-    with grid_cols[index % 3]:
-        render_execution_telemetry_card(task)
+    elif scenario_choice.startswith("Scenario B"):
+        st.markdown("#### Abandoned Flattop")
+        # Injection pool: idle slots from FT-01 … FT-05 (released when manifests go RESOLVED_HISTORICAL).
+        # Duplicate-active guard lives in handle_scenario_b_injection — retain for future inline SKU adds.
+        scenario_b_flattop_options = sync_scenario_b_available_flattops_pool(
+            st.session_state.get("flattops", [])
+        )
+        if not scenario_b_flattop_options:
+            st.info(
+                "No idle flattops available for injection (FT-01 through FT-05 are all live on the queue)."
+            )
+        flattop_id = st.selectbox(
+            "Flattop ID",
+            scenario_b_flattop_options or ["FT-01"],
+            key="shopfloor_b_flattop",
+            disabled=not scenario_b_flattop_options,
+        )
+        selected_names = st.multiselect(
+            "SKUs on flattop — cross-merchandising allowed (max 3)",
+            _ALL_PRODUCT_NAMES,
+            max_selections=3,
+            key="shopfloor_b_skus",
+        )
+        if st.button(
+            "Inject Scenario B",
+            key="shopfloor_inject_b",
+            disabled=not scenario_b_flattop_options,
+        ):
+            handle_scenario_b_injection(flattop_id, list(selected_names))

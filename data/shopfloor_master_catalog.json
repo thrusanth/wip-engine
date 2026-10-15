@@ -1,0 +1,33 @@
+[
+  {
+    "ean": "5010000000012",
+    "product_name": "Multipack Crisps 6pk",
+    "fixture_type": "SHELF",
+    "bom_units": 12,
+    "unit_price_pence": 250,
+    "inner_pack_units": 6
+  },
+  {
+    "ean": "5020000000067",
+    "product_name": "Chocolate Cookies",
+    "fixture_type": "SHELF",
+    "bom_units": 6,
+    "unit_price_pence": 150,
+    "inner_pack_units": 6
+  },
+  {
+    "ean": "5030000000098",
+    "product_name": "Lemonade 2L",
+    "fixture_type": "SHELF",
+    "bom_units": 6,
+    "unit_price_pence": 300
+  },
+  {
+    "ean": "5040000000105",
+    "product_name": "Flour 1.5kg",
+    "fixture_type": "SHELF",
+    "bom_units": 12,
+    "unit_price_pence": 250,
+    "inner_pack_units": 12
+  }
+]

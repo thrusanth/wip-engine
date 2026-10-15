@@ -12,6 +12,7 @@ from routers import bouncer, events, telemetry
 from services.api_bouncer_engine import process_cv_detection
 from services.bouncer_buffer import ensure_bouncer_buffer
 from services.engine import engine
+from services.shopfloor_catalog import init_shopfloor_catalog_db
 from services.simulator import spawn_simulator_task
 
 load_dotenv()
@@ -28,6 +29,7 @@ DEFAULT_CENTRAL_LEDGER_URL = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_bouncer_buffer()
+    init_shopfloor_catalog_db()
     simulator_task = spawn_simulator_task(engine)
     try:
         yield

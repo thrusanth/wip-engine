@@ -29,6 +29,13 @@ class CVEdgeDetection(BaseModel):
     loose_units_visible: int
     timestamp: datetime
     confidence_score: float = Field(ge=0.0, le=1.0)
+    ean: Optional[str] = None
+    edge_trace_id: Optional[str] = None
+    exception_type: Optional[str] = None
+    expected_ean: Optional[str] = None
+    units_lost: int = 0
+    fixture_id: Optional[str] = None
+    product_name: Optional[str] = None
 
 
 class TransactionEnginePayload(BaseModel):
@@ -37,6 +44,7 @@ class TransactionEnginePayload(BaseModel):
     ledger_adjustments: Dict[str, int]
     calculated_unit_price: Optional[float] = None
     compliance_rule_applied: Optional[str] = None
+    adjustment_summary: Optional[str] = None
 
 
 class LabelPrintPayload(BaseModel):

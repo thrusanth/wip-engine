@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from models.schemas import (
     IncomingDeliveryManifest,
     ResolutionEvent,
+    ShopfloorFlattopRegistration,
     TelemetryResponse,
     TotalPowerCutEvent,
 )
@@ -18,6 +19,18 @@ def resolve_event(event: ResolutionEvent):
         return engine.resolve_event(event)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post(
+    "/register-flattop",
+    response_model=TelemetryResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def register_shopfloor_flattop(registration: ShopfloorFlattopRegistration):
+    """Register an injected flattop (e.g. FT-01) in the WIP engine container store."""
+    if not registration.skus:
+        raise HTTPException(status_code=400, detail="At least one SKU is required.")
+    return engine.register_shopfloor_flattop(registration)
 
 
 @router.post("/delivery-manifest", response_model=TelemetryResponse)

@@ -24,6 +24,7 @@ from models.schemas import (
     TOTAL_POWER_CUT_STATUS,
     TotalPowerCutEvent,
     ResolutionType,
+    ShopfloorFlattopRegistration,
     SkuState,
     TelemetryResponse,
 )
@@ -119,9 +120,10 @@ class WipEngine:
                 sku_state.variance = 0
                 sku_state.shrink_confirmed = 0
             elif sku_state.resolution_type == ResolutionType.NONE:
-                sku_state.drift = initial_drift
+                confirmed = max(0, initial_drift)
+                sku_state.drift = confirmed
                 sku_state.variance = 0
-                sku_state.shrink_confirmed = initial_drift
+                sku_state.shrink_confirmed = confirmed
             elif sku_state.resolution_type == ResolutionType.PARTIAL:
                 sku_state.drift = max(0, initial_drift)
                 sku_state.variance = 0
@@ -521,6 +523,36 @@ class WipEngine:
             self._sync_active_exceptions()
             return self.get_telemetry()
 
+    def register_shopfloor_flattop(
+        self, registration: ShopfloorFlattopRegistration
+    ) -> TelemetryResponse:
+        """Stage or replace a flattop in engine.containers for resolve/telemetry lookup."""
+        with self._lock:
+            sku_states: List[SkuState] = []
+            for item in registration.skus:
+                profile = get_sku_profile(item.sku)
+                sku_states.append(
+                    SkuState(
+                        sku=item.sku,
+                        name=item.name or profile.get("name", item.sku),
+                        ean=item.ean or profile.get("ean", ""),
+                        price=profile.get("price"),
+                        expected=item.expected,
+                        worked=0,
+                        backstock=0,
+                    )
+                )
+
+            self.containers[registration.container_id] = ContainerState(
+                id=registration.container_id,
+                status=registration.status,
+                zone=registration.zone,
+                skus=sku_states,
+            )
+            self._recalculate_all()
+            self._sync_active_exceptions()
+            return self.get_telemetry()
+
     def resolve_event(self, event: ResolutionEvent) -> TelemetryResponse:
         with self._lock:
             container = self.containers.get(event.container_id)
@@ -544,15 +576,9 @@ class WipEngine:
                 if routed <= 0:
                     raise ValueError("Partial resolution requires at least one recovered unit")
                 target_sku.backstock += routed
-                remaining = outstanding - routed
-                if remaining <= 0:
-                    target_sku.is_resolved = True
-                    target_sku.resolution_type = ResolutionType.PARTIAL
-                    target_sku.recovered_units = routed
-                else:
-                    target_sku.is_resolved = False
-                    target_sku.resolution_type = None
-                    target_sku.recovered_units = 0
+                target_sku.is_resolved = True
+                target_sku.resolution_type = ResolutionType.PARTIAL
+                target_sku.recovered_units = routed
             elif event.resolution_type == ResolutionType.NONE:
                 target_sku.is_resolved = True
                 target_sku.resolution_type = ResolutionType.NONE
