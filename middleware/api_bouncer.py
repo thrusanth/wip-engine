@@ -13,8 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from services.bouncer_buffer import record_rejection
-
-BOUNCER_EDGE_TOKEN = os.getenv("BOUNCER_EDGE_TOKEN", "edge-cam-prod-992-xtz")
+from services.edge_tokens import is_valid_edge_token
 CV_RATE_LIMIT_PER_MINUTE = int(os.getenv("BOUNCER_CV_RATE_LIMIT_PER_MINUTE", "30"))
 FILL_RATE_LIMIT_PER_MINUTE = int(os.getenv("BOUNCER_FILL_RATE_LIMIT_PER_MINUTE", "120"))
 MAX_BODY_BYTES = int(os.getenv("BOUNCER_MAX_BODY_BYTES", "65536"))
@@ -169,7 +168,7 @@ class ApiBouncerMiddleware(BaseHTTPMiddleware):
         if path in CV_PATHS:
             limit = CV_RATE_LIMIT_PER_MINUTE
             api_key = request.headers.get("x-api-key")
-            if api_key != BOUNCER_EDGE_TOKEN:
+            if not is_valid_edge_token(api_key):
                 return _reject(
                     request,
                     status_code=401,

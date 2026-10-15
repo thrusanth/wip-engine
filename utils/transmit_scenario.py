@@ -9,6 +9,8 @@ from typing import Optional
 
 import requests
 
+from services.edge_tokens import edge_camera_headers
+
 BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
 
 
@@ -17,13 +19,6 @@ def _cv_webhook_url() -> str:
     if explicit:
         return explicit
     return f"{BASE_URL}/bouncer/cv-detection"
-
-
-def _edge_headers() -> dict[str, str]:
-    return {
-        "X-API-Key": os.getenv("BOUNCER_EDGE_TOKEN", "edge-cam-prod-992-xtz"),
-        "Content-Type": "application/json",
-    }
 
 
 def _detected_format_for_exception(exception_type: str) -> str:
@@ -74,7 +69,7 @@ def inject_custom_payload(
     response = requests.post(
         _cv_webhook_url(),
         json=payload,
-        headers=_edge_headers(),
+        headers=edge_camera_headers(),
         timeout=10,
     )
     return response, trx_id

@@ -44,7 +44,8 @@ Rejected requests receive HTTP `401`, `413`, `415`, `422`, or `429` responses an
 
 Environment variables (see `.env.example`):
 
-- `BOUNCER_EDGE_TOKEN` — edge camera ingress token (default `edge-cam-prod-992-xtz`)
+- `BOUNCER_EDGE_TOKEN` — edge camera ingress token (default `edge-cam-prod-992-xtz`); set on **both** backend and Streamlit for manual shopfloor injects
+- `BOUNCER_ALLOW_DEMO_EDGE_TOKEN` — when `true` (default), also accepts the public demo token so dashboard injects work without matching a rotated secret; set `false` in hardened production
 - `BOUNCER_CV_RATE_LIMIT_PER_MINUTE`, `BOUNCER_FILL_RATE_LIMIT_PER_MINUTE`, `BOUNCER_MAX_BODY_BYTES`
 - `BOUNCER_BUFFER_PATH` — SQLite WAL path for audit + rejection logs
 
