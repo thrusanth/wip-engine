@@ -275,6 +275,18 @@ def _bouncer_row_payload(row: dict) -> dict:
     return row
 
 
+def _bouncer_intercept_badge(status: str) -> tuple[str, str]:
+    """CSS class + icon for intercept status badge in the reconciliation table."""
+    normalized = status.strip().upper()
+    if normalized == "DAMAGED":
+        return "violation", "🚨"
+    if "VIOLATION" in normalized:
+        return "violation", "⚠️"
+    if normalized == "SYNCED":
+        return "synced", "✅"
+    return "synced", "✅"
+
+
 def _bouncer_reconciliation_row_html(row: dict) -> str:
     """Single table row — ported from api_bouncer/main.py get_dashboard()."""
     payload = _bouncer_row_payload(row)
@@ -326,8 +338,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
             f"{encoded_sku} ({instruction})</div>"
         )
 
-    status_class = "violation" if "VIOLATION" in status else "synced"
-    status_icon = "⚠️" if "VIOLATION" in status else "✅"
+    status_class, status_icon = _bouncer_intercept_badge(status)
     status_esc = html.escape(status)
 
     return (

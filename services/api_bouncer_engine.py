@@ -140,6 +140,12 @@ def _torn_routing_product_name(
     return ledger_data.parent_sku
 
 
+def _product_is_explicit_multipack(product_name: str) -> bool:
+    """Multipack torn-pack routing (markdown label / BOM split), not plain damage write-off."""
+    lowered = product_name.lower()
+    return "multipack" in lowered or "6pk" in lowered
+
+
 def _apply_health_and_safety_writeoff(
     payload: CVEdgeDetection,
     ledger_data: ExpectedLedger,
@@ -177,21 +183,22 @@ def _apply_torn_multipack_violation(
     ledger_data: ExpectedLedger,
     audit_trace_id: str,
 ) -> tuple[str, str, str, Optional[TransactionEnginePayload], Optional[LabelPrintPayload]]:
+    product_name = _torn_routing_product_name(payload, ledger_data)
+    damaged_qty = int(payload.loose_units_visible)
+
+    if not _product_is_explicit_multipack(product_name):
+        return _apply_health_and_safety_writeoff(
+            payload,
+            ledger_data,
+            status_code="DAMAGED",
+            format_alert=f"Damage Alerted! {damaged_qty} damaged units recorded.",
+        )
+
     status_code = "FORMAT_VIOLATION_TORN_PACK"
     format_alert = (
         f"Torn Multipack Detected! {payload.loose_units_visible} loose units exposed."
     )
     shop_floor_action = "DISPATCH_COLLEAGUE: Remove loose units & attach markdown label."
-
-    product_name = _torn_routing_product_name(payload, ledger_data)
-    is_master_ean_sku = ledger_data.parent_sku.startswith("EAN-")
-    if is_master_ean_sku and "multipack" not in product_name.lower():
-        return _apply_health_and_safety_writeoff(
-            payload,
-            ledger_data,
-            status_code=status_code,
-            format_alert=format_alert,
-        )
 
     multipack_retail = ledger_data.retail_price
     inner_pack_size = ledger_data.pack_quantity
