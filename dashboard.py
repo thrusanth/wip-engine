@@ -1992,9 +1992,11 @@ with tab6:
             _default_shelf = _SHELF_PRODUCT_NAMES[0]
             st.session_state.scenario_a_max_capacity = _shelf_sku_max_capacity(_default_shelf)
         if "filled_qty" not in st.session_state:
-            st.session_state.filled_qty = st.session_state.scenario_a_max_capacity
+            st.session_state.filled_qty = max(
+                0, int(st.session_state.scenario_a_max_capacity) - 1
+            )
         if "damaged_qty" not in st.session_state:
-            st.session_state.damaged_qty = 0
+            st.session_state.damaged_qty = 1
 
         st.selectbox(
             "Shelf SKU",
@@ -2019,12 +2021,16 @@ with tab6:
         with dmg_col:
             st.number_input(
                 "Damages Detected",
-                min_value=0,
+                min_value=1,
                 max_value=max_capacity,
                 key="damaged_qty",
                 on_change=_scenario_a_update_damage,
             )
         if st.button("Inject Scenario A", key="shopfloor_inject_a"):
+            damages = int(st.session_state.damaged_qty)
+            if damages <= 0:
+                st.warning("Damages must be greater than 0 to inject a waste scenario.")
+                st.stop()
             response, trx_id = inject_custom_payload(
                 ean=shelf_row["ean"],
                 product_name=shelf_name,

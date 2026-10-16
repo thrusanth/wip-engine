@@ -173,8 +173,8 @@ def sync_scenario_a_on_sku_change() -> None:
     product_name = st.session_state.get("shopfloor_a_sku") or SHELF_PRODUCT_NAMES[0]
     max_capacity = shelf_sku_max_capacity(product_name)
     st.session_state.scenario_a_max_capacity = max_capacity
-    st.session_state.filled_qty = max_capacity
-    st.session_state.damaged_qty = 0
+    st.session_state.filled_qty = max(0, max_capacity - 1)
+    st.session_state.damaged_qty = 1
 
 
 def scenario_a_update_fill() -> None:
