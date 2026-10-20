@@ -2,6 +2,7 @@ import copy
 import html
 import json
 import os
+import re
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
@@ -37,8 +38,10 @@ from mock_data import (
     TAB_EDGE_AI,
     TAB_OFFLINE_FILL,
     TAB_SHOPFLOOR_SCENARIOS,
+    TAB_PDA_VIEW,
     TAB_SYSTEM_OVERVIEW,
     TAB_TELEMETRY,
+    PDA_CLEARED_TRACE_IDS_KEY,
     TOTAL_POWER_CUT_STATUS,
     canonical_flattop_id,
     fleet_id_from_container_ref,
@@ -456,6 +459,335 @@ def fetch_telemetry():
     except requests.exceptions.RequestException as e:
         st.error(f"Failed to connect to backend API: {e}")
         st.stop()
+
+def _reconciliation_buffer_rows() -> list[dict]:
+    """Same WAL/API buffer used by the bouncer tab and KPI header poll."""
+    cached = st.session_state.get(_RECONCILIATION_LOG_SESSION_KEY)
+    if isinstance(cached, list):
+        return cached
+    rows = fetch_bouncer_reconciliations()
+    st.session_state[_RECONCILIATION_LOG_SESSION_KEY] = rows
+    return rows
+
+
+def _pda_item_name(row: dict) -> str:
+    payload = _bouncer_row_payload(row)
+    item_name = payload.get("item_name")
+    if isinstance(item_name, str) and item_name.strip():
+        return item_name.strip()
+    return _bouncer_product_display_name(row)
+
+
+def _pda_markdown_price(row: dict) -> float | None:
+    payload = _bouncer_row_payload(row)
+    raw_markdown = payload.get("markdown_price")
+    if raw_markdown is not None:
+        try:
+            return round(float(raw_markdown), 2)
+        except (TypeError, ValueError):
+            pass
+    tx_hook = payload.get("transaction_engine_hook")
+    if isinstance(tx_hook, dict) and tx_hook.get("calculated_unit_price") is not None:
+        try:
+            return round(float(tx_hook["calculated_unit_price"]), 2)
+        except (TypeError, ValueError):
+            pass
+    label_task = payload.get("label_print_task")
+    if isinstance(label_task, dict):
+        instruction = str(label_task.get("price_override_instruction") or "")
+        match = re.search(r"£\s*([\d]+(?:\.\d{1,2})?)", instruction)
+        if match:
+            try:
+                return round(float(match.group(1)), 2)
+            except ValueError:
+                pass
+    return None
+
+
+def _pda_printer_target(row: dict) -> str:
+    payload = _bouncer_row_payload(row)
+    label_task = payload.get("label_print_task")
+    if isinstance(label_task, dict) and label_task.get("printer_target"):
+        return str(label_task["printer_target"])
+    if payload.get("printer_target"):
+        return str(payload["printer_target"])
+    return "—"
+
+
+def _latest_pda_print_task(reconciliations: list[dict], cleared_trace_ids: set[str]) -> dict | None:
+    """Newest reconciliation row with an active label print task (buffer is newest-first)."""
+    pending = _all_pda_print_tasks(reconciliations, cleared_trace_ids)
+    return pending[0] if pending else None
+
+
+def _all_pda_print_tasks(
+    reconciliations: list[dict], cleared_trace_ids: set[str]
+) -> list[dict]:
+    """All reconciliation rows with active label print tasks (buffer order, newest-first)."""
+    tasks: list[dict] = []
+    for row in reconciliations:
+        payload = _bouncer_row_payload(row)
+        label_task = payload.get("label_print_task")
+        if not isinstance(label_task, dict) or not label_task:
+            continue
+        trace_id = str(row.get("trace_id") or payload.get("trace_id") or "")
+        if trace_id and trace_id in cleared_trace_ids:
+            continue
+        tasks.append(row)
+    return tasks
+
+
+def _pda_trace_id(row: dict) -> str:
+    payload = _bouncer_row_payload(row)
+    return str(row.get("trace_id") or payload.get("trace_id") or "")
+
+
+def _pda_price_button_label(row: dict) -> str:
+    price = _pda_markdown_price(row)
+    price_text = f"£{price:.2f}" if price is not None else "—"
+    return f"🖨️ {_pda_item_name(row)} - {price_text}"
+
+
+def render_pda_view_tab() -> None:
+    if "pda_selected_trace_id" not in st.session_state:
+        st.session_state.pda_selected_trace_id = None
+
+    st.subheader("Frontline PDA — Zebra TC5x Simulator")
+    st.caption(
+        "Live print tasks from the bouncer reconciliation WAL "
+        "(same feed as **API Bouncer → Live Reconciliation Log**)."
+    )
+
+    reconciliations = _reconciliation_buffer_rows()
+    cleared: set[str] = set(st.session_state.get(PDA_CLEARED_TRACE_IDS_KEY) or [])
+    pending_tasks = _all_pda_print_tasks(reconciliations, cleared)
+
+    st.markdown(
+        """
+<style>
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 {
+    width: 380px !important;
+    max-width: 380px !important;
+    margin: 0 auto !important;
+    height: 820px !important;
+    border: 16px solid #222 !important;
+    border-radius: 30px !important;
+    background-color: #111 !important;
+    padding: 10px !important;
+    min-height: 600px !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 {
+    width: 100% !important;
+    height: 680px !important;
+    overflow-y: auto !important;
+    background-color: #121212 !important;
+    border: 1px solid #333 !important;
+    border-radius: 4px !important;
+    padding: 20px !important;
+    min-height: 500px !important;
+    color: #f3f4f6 !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 .pda-hw-bezel {
+    padding: 8px 0 12px;
+    text-align: center;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 .pda-hw-speaker {
+    width: 56px;
+    height: 8px;
+    margin: 0 auto 8px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #333 0%, #0a0a0a 100%);
+    border: 1px solid #444;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 .pda-hw-brand {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.28em;
+    color: #d1d5db;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-pending-title {
+    color: #f3f4f6 !important;
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-warning {
+    background: #422006;
+    border: 2px solid #f59e0b;
+    color: #fef3c7;
+    font-weight: 800;
+    font-size: 1rem;
+    text-align: center;
+    padding: 12px 8px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    line-height: 1.3;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #9ca3af;
+    margin: 0 0 4px;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-value {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0 0 14px;
+    word-break: break-word;
+    color: #f3f4f6;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-value.price {
+    font-size: 1.45rem;
+    color: #fcd34d;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-clear {
+    text-align: center;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #86efac;
+    padding: 48px 12px;
+    line-height: 1.5;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button {
+    background-color: #1a1a1a !important;
+    border: 1px solid #22c55e !important;
+    color: #22c55e !important;
+    border-radius: 6px !important;
+    transition: background-color 0.2s ease;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:hover {
+    background-color: rgba(34, 197, 94, 0.15) !important;
+    border-color: #4ade80 !important;
+    color: #4ade80 !important;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 [data-testid="stBaseButton-primary"] button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 [data-testid="stBaseButton-primary"] button,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button[kind="primary"] {
+    background-color: #dc2626 !important;
+    border: 1px solid #dc2626 !important;
+    color: #ffffff !important;
+    border-radius: 6px !important;
+    font-weight: 700 !important;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 [data-testid="stBaseButton-primary"] button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 [data-testid="stBaseButton-primary"] button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button[kind="primary"]:hover {
+    background-color: #b91c1c !important;
+    border-color: #b91c1c !important;
+    color: #ffffff !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] {
+    margin-bottom: 8px;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+    _, col_center, _ = st.columns([1, 1.2, 1])
+    with col_center:
+        with st.container(key="pda_hardware_shell_v1"):
+            st.markdown(
+                '<div class="pda-hw-bezel">'
+                '<div class="pda-hw-speaker"></div>'
+                '<div class="pda-hw-brand">ZEBRA</div>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+            with st.container(key="pda_hardware_screen_v1"):
+                selected_trace_id = st.session_state.pda_selected_trace_id
+
+                if selected_trace_id is None:
+                    if not pending_tasks:
+                        st.markdown(
+                            '<p class="pda-hw-clear">✅ No pending tasks. Shop floor is clear.</p>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
+                            unsafe_allow_html=True,
+                        )
+                        for task_row in pending_tasks:
+                            trace_id = _pda_trace_id(task_row)
+                            if st.button(
+                                _pda_price_button_label(task_row),
+                                key=f"select_{trace_id}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.pda_selected_trace_id = trace_id
+                                st.rerun()
+                else:
+                    pending_task = next(
+                        (
+                            row
+                            for row in pending_tasks
+                            if _pda_trace_id(row) == selected_trace_id
+                        ),
+                        None,
+                    )
+                    if pending_task is None:
+                        st.session_state.pda_selected_trace_id = None
+                        st.rerun()
+
+                    if st.button(
+                        "⬅️ Back to Queue",
+                        key="pda_back_to_queue",
+                        type="secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.pda_selected_trace_id = None
+                        st.rerun()
+
+                    item_name = html.escape(_pda_item_name(pending_task))
+                    markdown_price = _pda_markdown_price(pending_task)
+                    price_display = (
+                        html.escape(f"£{markdown_price:.2f}")
+                        if markdown_price is not None
+                        else html.escape("—")
+                    )
+                    printer_target = html.escape(_pda_printer_target(pending_task))
+                    trace_id = _pda_trace_id(pending_task)
+
+                    st.markdown(
+                        f'<div class="pda-hw-warning">⚠️ PRINTER DISPATCH REQUIRED</div>'
+                        f'<p class="pda-hw-label">Product</p>'
+                        f'<p class="pda-hw-value">{item_name}</p>'
+                        f'<p class="pda-hw-label">Price</p>'
+                        f'<p class="pda-hw-value price">{price_display}</p>'
+                        f'<p class="pda-hw-label">Routing</p>'
+                        f'<p class="pda-hw-value">{printer_target}</p>',
+                        unsafe_allow_html=True,
+                    )
+
+                    if st.button(
+                        "CONFIRM & PRINT ZPL",
+                        use_container_width=True,
+                        type="primary",
+                        key=f"pda_confirm_print_{trace_id or 'latest'}",
+                    ):
+                        if trace_id:
+                            cleared.add(trace_id)
+                            st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = sorted(cleared)
+                        st.session_state.pda_selected_trace_id = None
+                        st.toast("ZPL Payload Dispatched to Printer")
+                        st.rerun()
+
 
 def _bouncer_product_display_name(row: dict) -> str:
     """Human-readable product title for the reconciliation log (master catalog fallback)."""
@@ -1716,7 +2048,7 @@ def _count_pending_offline_scans(db_path: str | Path) -> int:
 if _DASHBOARD_ACTIVE_TAB_KEY not in st.session_state:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(DASHBOARD_TABS)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(DASHBOARD_TABS)
 
 with tab1:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
@@ -2128,3 +2460,7 @@ with tab6:
             disabled=not scenario_b_flattop_options,
         ):
             handle_scenario_b_injection(flattop_id, list(selected_names))
+
+with tab7:
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_PDA_VIEW
+    render_pda_view_tab()

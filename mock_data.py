@@ -43,6 +43,8 @@ TAB_OFFLINE_FILL = "Offline Fill"
 TAB_EDGE_AI = "Edge AI Autonomy"
 TAB_API_BOUNCER = "API Bouncer"
 TAB_SHOPFLOOR_SCENARIOS = "Shopfloor Scenarios"
+TAB_PDA_VIEW = "PDA View"
+PDA_CLEARED_TRACE_IDS_KEY = "pda_cleared_trace_ids"
 DASHBOARD_TABS = [
     TAB_SYSTEM_OVERVIEW,
     TAB_TELEMETRY,
@@ -50,6 +52,7 @@ DASHBOARD_TABS = [
     TAB_EDGE_AI,
     TAB_API_BOUNCER,
     TAB_SHOPFLOOR_SCENARIOS,
+    TAB_PDA_VIEW,
 ]
 
 TOTAL_POWER_CUT_STATUS = "Mandatory Full Gap Scan Required"
@@ -580,6 +583,8 @@ def shelf_sku_max_capacity(product_name: str) -> int:
 
 
 def init_session_state_defaults() -> None:
+    if PDA_CLEARED_TRACE_IDS_KEY not in st.session_state:
+        st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = []
     if "active_ean" not in st.session_state:
         st.session_state.active_ean = []
     if "fixture_type" not in st.session_state:
