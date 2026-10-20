@@ -48,6 +48,7 @@ class CVEdgeDetection(BaseModel):
     units_lost: int = 0
     fixture_id: Optional[str] = None
     product_name: Optional[str] = None
+    printer_target: Optional[str] = None
 
 
 class TransactionEnginePayload(BaseModel):

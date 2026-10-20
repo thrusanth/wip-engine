@@ -19,6 +19,11 @@ from models.bouncer_schemas import (
 )
 from services.bouncer_buffer import get_reconciliation_by_trace_id, record_reconciliation
 from services.waste_metrics import record_scenario_a_waste
+from services.cv_catalog import (
+    _fixture_from_printer_target,
+    expected_ledger_from_cv_item,
+    resolve_cv_catalog_item,
+)
 from services.shopfloor_catalog import (
     build_master_ledger_db,
     catalog_by_ean,
@@ -124,6 +129,13 @@ def _resolve_ledger(payload: CVEdgeDetection) -> ExpectedLedger:
         for entry in CENTRAL_LEDGER_DB.values():
             if entry.ean == payload.ean:
                 return entry
+        resolved = resolve_cv_catalog_item(payload.ean)
+        if resolved:
+            return expected_ledger_from_cv_item(resolved[1])
+    if payload.product_name:
+        resolved = resolve_cv_catalog_item(payload.product_name)
+        if resolved:
+            return expected_ledger_from_cv_item(resolved[1])
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SKU not found.")
 
 
@@ -238,7 +250,8 @@ def _apply_torn_multipack_violation(
     )
 
     label_task = LabelPrintPayload(
-        printer_target=f"{payload.physical_location}-ZPL-PRINTER",
+        printer_target=payload.printer_target
+        or f"{payload.physical_location}-ZPL-PRINTER",
         barcode_format="CODE128",
         encoded_sku=ledger_data.linked_child_sku,
         item_trace_id=audit_trace_id,
@@ -279,19 +292,31 @@ def _parse_damage_event_timestamp(raw: Optional[str]) -> datetime:
 def _damage_event_to_cv_detection(
     payload: DamageEventPayload, trx_id: str
 ) -> CVEdgeDetection:
-    item_name = payload.item_name.strip()
-    catalog_row = catalog_by_product_name().get(item_name)
-    if not catalog_row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown shelf item: {item_name}",
-        )
+    stock_name = payload.item_name
+    printer_target: Optional[str] = None
+    resolved = resolve_cv_catalog_item(stock_name)
+    if resolved:
+        _, cv_item = resolved
+        ean = str(cv_item["ean"])
+        parent_sku = parent_sku_for_ean(ean)
+        bom_units = max(1, int(cv_item["pack_size"])) * 2
+        printer_target = str(cv_item["printer_target"])
+        fixture_id = _fixture_from_printer_target(printer_target)
+        product_name = cv_item["name"]
+    else:
+        catalog_row = catalog_by_product_name().get(stock_name.strip())
+        if not catalog_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown shelf item: {stock_name}",
+            )
+        ean = str(catalog_row["ean"])
+        parent_sku = parent_sku_for_ean(ean)
+        bom_units = int(catalog_row["bom_units"])
+        fixture_id = "CAM-AISLE-04"
+        product_name = stock_name
 
-    ean = str(catalog_row["ean"])
-    parent_sku = parent_sku_for_ean(ean)
-    bom_units = int(catalog_row["bom_units"])
     condition = payload.condition.strip().upper()
-    fixture_id = "CAM-AISLE-04"
 
     exception_type: Optional[str] = None
     detected_format = "SHRINK_WRAPPED_MULTIPACK"
@@ -326,7 +351,8 @@ def _damage_event_to_cv_detection(
         edge_trace_id=trx_id,
         exception_type=exception_type,
         fixture_id=fixture_id,
-        product_name=item_name,
+        product_name=product_name,
+        printer_target=printer_target,
     )
 
 

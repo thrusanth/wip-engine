@@ -16,11 +16,26 @@ BOUNCER_DAMAGE_URL = "http://127.0.0.1:8000/api/cv/damage-event"
 EDGE_API_KEY = "edge-cam-prod-992-xtz"
 HARDCODED_ITEM_NAME = "Multipack Crisps 6pk"
 
+LUNA_CATALOG_KEYS = [
+    "walkers_crisps_6pk",
+    "heinz_beans_4pk",
+    "coca_cola_8pk",
+    "schweppes_lemonade_2l",
+    "fosters_lager_4pk",
+    "galaxy_cookie_180g",
+    "doritos_cool_original_sharing_bag",
+    "asahi_super_dry_620ml",
+    "unknown",
+]
+
 SYSTEM_PROMPT = (
     "You are a retail inventory inspector analyzing product packaging on a shop floor. "
-    "Respond with strictly valid JSON containing exactly two keys: "
-    '"condition" (must be one of: INTACT, TORN_MULTIPACK, CRUSHED) and '
-    '"confidence" (a float between 0.0 and 1.0 indicating classification certainty). '
+    "Respond with strictly valid JSON containing exactly three keys: "
+    '"condition" (must be one of: INTACT, TORN_MULTIPACK, CRUSHED), '
+    '"confidence" (a float between 0.0 and 1.0 indicating classification certainty), and '
+    '"catalog_key" (must be one of: '
+    + ", ".join(LUNA_CATALOG_KEYS)
+    + "). "
     "Do not include any other keys or prose."
 )
 
@@ -116,13 +131,23 @@ def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str]:
         raise ValueError(f"Invalid confidence from model: {decision!r}") from exc
 
     confidence = max(0.0, min(1.0, confidence))
-    return {"condition": condition, "confidence": confidence}
+
+    catalog_key = str(decision.get("catalog_key", "")).strip()
+    if catalog_key not in LUNA_CATALOG_KEYS:
+        raise ValueError(f"Invalid catalog_key from model: {catalog_key!r}")
+
+    return {
+        "condition": condition,
+        "confidence": confidence,
+        "catalog_key": catalog_key,
+    }
 
 
 def trigger_bouncer_webhook(decision_data: dict[str, float | str]) -> dict:
     """POST damage classification to the local API Bouncer CV ingestion route."""
+    catalog_key = str(decision_data.get("catalog_key") or HARDCODED_ITEM_NAME)
     payload = {
-        "item_name": HARDCODED_ITEM_NAME,
+        "item_name": catalog_key,
         "condition": str(decision_data["condition"]),
         "confidence_score": float(decision_data["confidence"]),
     }
