@@ -3,6 +3,7 @@ import html
 import json
 import os
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 from uuid import NAMESPACE_DNS, uuid5
 
@@ -57,6 +58,7 @@ from mock_data import (
     compact_instance_id_for_display,
     SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
 )
+from services.bouncer_reconciliation_kpis import aggregate_kpis_from_reconciliations
 from state_handlers import (
     extract_offline_recovery_payload,
     handle_purge_reconciliation_log,
@@ -689,7 +691,12 @@ def _confirmed_loss_units(sku_data: dict) -> int:
     return max(0, expected - worked - backstock)
 
 
-def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
+def derive_live_overview_metrics(
+    containers: dict,
+    base_metrics: dict,
+    *,
+    bouncer_kpis: dict | None = None,
+) -> dict:
     """Recompute drift/task metrics from quarantined live containers only."""
     total_drift = 0
     total_shrink_cost = 0.0
@@ -700,12 +707,16 @@ def derive_live_overview_metrics(containers: dict, base_metrics: dict) -> dict:
             unit_price = float(sku.get("price") or 0.0)
             total_shrink_cost += drift * unit_price
 
-    pending_edge_tasks = count_pending_edge_tasks_from_queue(
-        st.session_state.get("flattops")
-    )
-
-    waste_qty = int(base_metrics.get("daily_waste_qty") or 0)
-    waste_cost = float(base_metrics.get("daily_waste_cost") or 0.0)
+    if bouncer_kpis is not None:
+        pending_edge_tasks = 0
+        waste_qty = int(bouncer_kpis.get("daily_waste_qty") or 0)
+        waste_cost = float(bouncer_kpis.get("daily_waste_cost") or 0.0)
+    else:
+        pending_edge_tasks = count_pending_edge_tasks_from_queue(
+            st.session_state.get("flattops")
+        )
+        waste_qty = int(base_metrics.get("daily_waste_qty") or 0)
+        waste_cost = float(base_metrics.get("daily_waste_cost") or 0.0)
 
     return {
         **base_metrics,
@@ -786,73 +797,103 @@ except Exception as e:
     st.stop()
 
 live_containers = filter_containers_for_live_tabs(containers, active_exceptions)
-live_metrics = derive_live_overview_metrics(live_containers, metrics)
-_sync_kpi_session_state(metrics)
+st.session_state[_DASHBOARD_CONTAINERS_KEY] = containers
+st.session_state[_DASHBOARD_ACTIVE_EXCEPTIONS_KEY] = active_exceptions
 
-_display_phantom_drift = _compute_total_missing_units_from_flattop_queue(
-    live_containers
-)
-_display_pending_edge_tasks = int(live_metrics["pending_edge_tasks"])
-current_total_shrink_cost = _compute_total_at_risk_cost_from_flattop_queue(
-    live_containers
-)
 
-# ---------------------------------------------------------
-# Top Header Section: Global Metrics
-# ---------------------------------------------------------
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-with col1:
-    st.metric(label="Pending Delivery Cages", value=live_metrics["pending_delivery_cages"], delta="Awaiting Breakdown", delta_color="off")
-with col2:
-    st.metric(
-        label="Active Flattops",
-        value=_active_flattop_count(),
-        delta="Live Manifests",
-        delta_color="off",
+def _render_global_kpi_header(*, poll_reconciliation_log: bool) -> dict:
+    """Top overview metrics; optional live poll of bouncer reconciliation WAL."""
+    session_containers = st.session_state.get(_DASHBOARD_CONTAINERS_KEY, {})
+    session_exceptions = st.session_state.get(_DASHBOARD_ACTIVE_EXCEPTIONS_KEY, [])
+    session_metrics = st.session_state.get(_DASHBOARD_METRICS_KEY, _empty_overview_metrics())
+    header_containers = filter_containers_for_live_tabs(
+        session_containers, session_exceptions
     )
-with col3:
-    st.metric(
-        label="Total Missing Units",
-        value=_display_phantom_drift,
-        delta="Unconfirmed + Confirmed",
-        delta_color="inverse",
+
+    bouncer_kpis = None
+    if poll_reconciliation_log:
+        reconciliations = fetch_bouncer_reconciliations()
+        st.session_state[_RECONCILIATION_LOG_SESSION_KEY] = reconciliations
+        bouncer_kpis = aggregate_kpis_from_reconciliations(reconciliations)
+        _sync_kpi_session_state(session_metrics, bouncer_kpis=bouncer_kpis)
+
+    live_metrics = derive_live_overview_metrics(
+        header_containers,
+        session_metrics,
+        bouncer_kpis=bouncer_kpis,
     )
-with col4:
-    st.metric(
-        label="Total At-Risk Cost",
-        value=f"£{current_total_shrink_cost:.2f}",
-        delta="Retail Exposure",
-        delta_color="inverse",
+
+    display_phantom_drift = _compute_total_missing_units_from_flattop_queue(
+        header_containers
     )
-with col5:
-    if _display_pending_edge_tasks > 0:
+    display_pending_edge_tasks = 0
+    total_at_risk_cost = _compute_total_at_risk_cost_from_flattop_queue(header_containers)
+    waste_qty = int(live_metrics["daily_waste_qty"])
+    waste_cost = float(live_metrics["daily_waste_cost"])
+
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+    with col1:
         st.metric(
-            label="Pending Edge Tasks",
-            value=_display_pending_edge_tasks,
-            delta="Action Required",
+            label="Pending Delivery Cages",
+            value=live_metrics["pending_delivery_cages"],
+            delta="Awaiting Breakdown",
+            delta_color="off",
+        )
+    with col2:
+        st.metric(
+            label="Active Flattops",
+            value=_active_flattop_count(),
+            delta="Live Manifests",
+            delta_color="off",
+        )
+    with col3:
+        st.metric(
+            label="Total Missing Units",
+            value=display_phantom_drift,
+            delta="Unconfirmed + Confirmed",
             delta_color="inverse",
         )
-    else:
+    with col4:
+        st.metric(
+            label="Total At-Risk Cost",
+            value=f"£{total_at_risk_cost:.2f}",
+            delta="Retail Exposure",
+            delta_color="inverse",
+        )
+    with col5:
         st.metric(
             label="Pending Edge Tasks",
-            value=_display_pending_edge_tasks,
+            value=display_pending_edge_tasks,
             delta="All Tasks Cleared",
             delta_color="normal",
         )
-with col6:
-    st.metric(
-        label="Daily Waste QTY",
-        value=st.session_state.daily_waste_qty,
-        delta="↑ Scenario A Write-offs",
-        delta_color="inverse",
-    )
-with col7:
-    st.metric(
-        label="Daily Waste Cost",
-        value=f"£{st.session_state.daily_waste_cost:.2f}",
-        delta="↑ Known Margin Lost",
-        delta_color="inverse",
-    )
+    with col6:
+        st.metric(
+            label="Daily Waste QTY",
+            value=waste_qty,
+            delta="↑ CV Reconciliation Write-offs",
+            delta_color="inverse",
+        )
+    with col7:
+        st.metric(
+            label="Daily Waste Cost",
+            value=f"£{waste_cost:.2f}",
+            delta="↑ Known Margin Lost",
+            delta_color="inverse",
+        )
+
+    return live_metrics
+
+
+@st.fragment(run_every=timedelta(seconds=5))
+def _poll_global_kpi_header_from_bouncer_log() -> dict:
+    return _render_global_kpi_header(poll_reconciliation_log=True)
+
+
+# ---------------------------------------------------------
+# Top Header Section: Global Metrics (polls bouncer WAL every 5s)
+# ---------------------------------------------------------
+live_metrics = _poll_global_kpi_header_from_bouncer_log()
 
 telemetry_rows = []
 for container_id, container in live_containers.items():

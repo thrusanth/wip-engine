@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
 
 from models.bouncer_schemas import (
     CVEdgeDetection,
+    DamageEventPayload,
     ExpectedLedger,
     LabelPrintPayload,
     ShelfReconciliation,
     TransactionEnginePayload,
 )
-from services.bouncer_buffer import record_reconciliation
+from services.bouncer_buffer import get_reconciliation_by_trace_id, record_reconciliation
 from services.waste_metrics import record_scenario_a_waste
 from services.shopfloor_catalog import (
     build_master_ledger_db,
     catalog_by_ean,
+    catalog_by_product_name,
     parent_sku_for_ean,
 )
 
@@ -246,7 +249,111 @@ def _apply_torn_multipack_violation(
     return status_code, format_alert, shop_floor_action, transaction_payload, label_task
 
 
+def _shelf_reconciliation_from_log(row: dict) -> ShelfReconciliation:
+    nested = row.get("payload")
+    if isinstance(nested, dict) and nested.get("trace_id"):
+        return ShelfReconciliation(**nested)
+    return ShelfReconciliation(
+        trace_id=str(row["trace_id"]),
+        sku=str(row["sku"]),
+        ean=str(row.get("ean") or ""),
+        status=str(row["status"]),
+        format_alert=str(row.get("format_alert") or ""),
+        shop_floor_action=str(row.get("shop_floor_action") or ""),
+    )
+
+
+def _parse_damage_event_timestamp(raw: Optional[str]) -> datetime:
+    if raw and str(raw).strip():
+        text = str(raw).strip().replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="timestamp must be ISO-8601 when provided.",
+            ) from exc
+    return datetime.now(timezone.utc)
+
+
+def _damage_event_to_cv_detection(
+    payload: DamageEventPayload, trx_id: str
+) -> CVEdgeDetection:
+    item_name = payload.item_name.strip()
+    catalog_row = catalog_by_product_name().get(item_name)
+    if not catalog_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown shelf item: {item_name}",
+        )
+
+    ean = str(catalog_row["ean"])
+    parent_sku = parent_sku_for_ean(ean)
+    bom_units = int(catalog_row["bom_units"])
+    condition = payload.condition.strip().upper()
+    fixture_id = "CAM-AISLE-04"
+
+    exception_type: Optional[str] = None
+    detected_format = "SHRINK_WRAPPED_MULTIPACK"
+    loose_units_visible = 0
+
+    if condition == "TORN_MULTIPACK":
+        exception_type = "TORN_MULTIPACK"
+        detected_format = "TORN_MULTIPACK"
+        loose_units_visible = 1
+    elif condition == "CRUSHED":
+        exception_type = "TORN_MULTIPACK"
+        detected_format = "TORN_MULTIPACK"
+        loose_units_visible = 1
+    elif condition == "INTACT":
+        detected_format = "SHRINK_WRAPPED_MULTIPACK"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported condition: {payload.condition}",
+        )
+
+    return CVEdgeDetection(
+        store_region="ENG",
+        parent_sku=parent_sku,
+        detected_quantity=bom_units,
+        physical_location=fixture_id,
+        detected_format=detected_format,
+        loose_units_visible=loose_units_visible,
+        timestamp=_parse_damage_event_timestamp(payload.timestamp),
+        confidence_score=payload.confidence_score,
+        ean=ean,
+        edge_trace_id=trx_id,
+        exception_type=exception_type,
+        fixture_id=fixture_id,
+        product_name=item_name,
+    )
+
+
+def process_damage_event(payload: DamageEventPayload) -> ShelfReconciliation:
+    """
+    Ingest a simplified edge damage event: idempotent on trx_id, then CV bouncer pipeline.
+    """
+    trx_id = (
+        payload.trx_id.strip()
+        if payload.trx_id and payload.trx_id.strip()
+        else f"TRX-CV-{uuid.uuid4().hex[:12].upper()}"
+    )
+    cached = get_reconciliation_by_trace_id(trx_id)
+    if cached:
+        return _shelf_reconciliation_from_log(cached)
+
+    cv_payload = _damage_event_to_cv_detection(payload, trx_id)
+    return process_cv_detection(cv_payload)
+
+
 def process_cv_detection(payload: CVEdgeDetection) -> ShelfReconciliation:
+    audit_trace_id = payload.edge_trace_id or f"TRX-{uuid.uuid4().hex[:8].upper()}"
+    if payload.edge_trace_id:
+        cached = get_reconciliation_by_trace_id(audit_trace_id)
+        if cached:
+            return _shelf_reconciliation_from_log(cached)
+
     if payload.confidence_score < 0.85:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -260,7 +367,6 @@ def process_cv_detection(payload: CVEdgeDetection) -> ShelfReconciliation:
     shop_floor_action = "NONE - Inventory aligned"
     transaction_payload: Optional[TransactionEnginePayload] = None
     label_task: Optional[LabelPrintPayload] = None
-    audit_trace_id = payload.edge_trace_id or f"TRX-{uuid.uuid4().hex[:8].upper()}"
     exception_type = payload.exception_type or ""
 
     if exception_type == "ABANDONED_FLATTOP":

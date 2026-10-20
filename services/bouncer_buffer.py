@@ -127,6 +127,32 @@ def list_rejections(limit: int = 50, db_path: str = BOUNCER_DB_PATH) -> list[dic
         conn.close()
 
 
+def get_reconciliation_by_trace_id(
+    trace_id: str, db_path: str = BOUNCER_DB_PATH
+) -> dict[str, Any] | None:
+    """Return a stored reconciliation row (with parsed payload) or None."""
+    conn = ensure_bouncer_buffer(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT trace_id, created_at, sku, ean, status, format_alert, shop_floor_action, payload_json
+            FROM reconciliation_log
+            WHERE trace_id = ?;
+            """,
+            (trace_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        try:
+            item["payload"] = json.loads(item.pop("payload_json", "{}"))
+        except json.JSONDecodeError:
+            item["payload"] = {}
+        return item
+    finally:
+        conn.close()
+
+
 def list_reconciliations(limit: int = 50, db_path: str = BOUNCER_DB_PATH) -> list[dict[str, Any]]:
     conn = ensure_bouncer_buffer(db_path)
     try:

@@ -206,8 +206,20 @@ def merge_backend_waste_metrics(metrics: dict) -> dict:
     return metrics
 
 
-def sync_kpi_session_state(metrics: dict) -> None:
-    """Persist H&S waste KPIs in Streamlit session across reruns."""
+def sync_kpi_session_state(
+    metrics: dict,
+    *,
+    bouncer_kpis: dict | None = None,
+) -> None:
+    """Persist header KPIs in Streamlit session (reconciliation log overrides waste totals)."""
+    if bouncer_kpis is not None:
+        st.session_state[KPI_SESSION_PENDING_EDGE_TASKS] = 0
+        st.session_state.daily_waste_qty = int(bouncer_kpis.get("daily_waste_qty") or 0)
+        st.session_state.daily_waste_cost = float(bouncer_kpis.get("daily_waste_cost") or 0.0)
+        st.session_state[KPI_SESSION_DAILY_WASTE_QTY] = st.session_state.daily_waste_qty
+        st.session_state[KPI_SESSION_DAILY_WASTE_COST] = st.session_state.daily_waste_cost
+        return
+
     backend_waste_qty = int(metrics.get("daily_waste_qty") or 0)
     backend_waste_cost = float(metrics.get("daily_waste_cost") or 0.0)
     st.session_state.daily_waste_qty = max(

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from middleware.api_bouncer import ApiBouncerMiddleware
 from middleware.trx_id import TRX_ID_HEADER, TrxIdMiddleware
 from models.bouncer_schemas import CVEdgeDetection, ShelfReconciliation
-from routers import bouncer, events, telemetry
+from routers import bouncer, cv, events, telemetry
 from services.api_bouncer_engine import process_cv_detection
 from services.bouncer_buffer import ensure_bouncer_buffer
 from services.engine import engine
@@ -57,6 +57,7 @@ app.add_middleware(ApiBouncerMiddleware)
 app.include_router(telemetry.router)
 app.include_router(events.router)
 app.include_router(bouncer.router)
+app.include_router(cv.router)
 
 
 @app.post("/webhook/cv-detection", response_model=ShelfReconciliation, tags=["api-bouncer"])

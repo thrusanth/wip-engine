@@ -24,9 +24,10 @@ CV_PATHS = frozenset(
         "/api/v1/bouncer/cv-detection",
     }
 )
+CV_DAMAGE_PATHS = frozenset({"/api/cv/damage-event"})
 FILL_PATHS = frozenset({"/api/v1/telemetry/fill"})
 
-PROTECTED_PATHS = CV_PATHS | FILL_PATHS
+PROTECTED_PATHS = CV_PATHS | CV_DAMAGE_PATHS | FILL_PATHS
 
 
 class _RateLimiter:
@@ -86,6 +87,24 @@ def _validate_fill_integrity(body: dict) -> str | None:
         return "sku must be a non-empty string"
     if body.get("action") not in ("increment", "decrement", "fill"):
         return "action must be increment, decrement, or fill"
+    return None
+
+
+def _validate_damage_event_integrity(body: dict) -> str | None:
+    required = ("item_name", "condition", "confidence_score")
+    missing = [field for field in required if field not in body]
+    if missing:
+        return f"Missing required damage event fields: {', '.join(missing)}"
+    if not isinstance(body.get("item_name"), str) or not body["item_name"].strip():
+        return "item_name must be a non-empty string"
+    if not isinstance(body.get("condition"), str) or not body["condition"].strip():
+        return "condition must be a non-empty string"
+    try:
+        score = float(body["confidence_score"])
+    except (TypeError, ValueError):
+        return "confidence_score must be numeric"
+    if score < 0 or score > 1:
+        return "confidence_score must be between 0 and 1"
     return None
 
 
@@ -165,7 +184,7 @@ class ApiBouncerMiddleware(BaseHTTPMiddleware):
             )
 
         client = _client_key(request)
-        if path in CV_PATHS:
+        if path in CV_PATHS or path in CV_DAMAGE_PATHS:
             limit = CV_RATE_LIMIT_PER_MINUTE
             api_key = request.headers.get("x-api-key")
             if not is_valid_edge_token(api_key):
@@ -176,7 +195,10 @@ class ApiBouncerMiddleware(BaseHTTPMiddleware):
                     detail="Unauthorized: Invalid Edge Camera Token",
                     payload_preview=preview,
                 )
-            integrity_error = _validate_cv_integrity(body)
+            if path in CV_DAMAGE_PATHS:
+                integrity_error = _validate_damage_event_integrity(body)
+            else:
+                integrity_error = _validate_cv_integrity(body)
         else:
             limit = FILL_RATE_LIMIT_PER_MINUTE
             integrity_error = _validate_fill_integrity(body)

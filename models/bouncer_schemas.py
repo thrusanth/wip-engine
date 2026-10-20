@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ExpectedLedger(BaseModel):
@@ -18,6 +18,18 @@ class ExpectedLedger(BaseModel):
     volume_litres: Optional[float] = None
     excise_duty: Optional[float] = None
     vat_amount: Optional[float] = None
+
+
+class DamageEventPayload(BaseModel):
+    """Edge camera damage / condition event (extra device fields ignored)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    item_name: str
+    condition: str
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    trx_id: Optional[str] = None
+    timestamp: Optional[str] = None
 
 
 class CVEdgeDetection(BaseModel):
@@ -64,6 +76,12 @@ class ShelfReconciliation(BaseModel):
     shop_floor_action: str
     transaction_engine_hook: Optional[TransactionEnginePayload] = None
     label_print_task: Optional[LabelPrintPayload] = None
+
+
+class DamageEventResponse(BaseModel):
+    trx_id: str
+    transaction_status: str
+    reconciliation: ShelfReconciliation
 
 
 class BouncerHealthResponse(BaseModel):
