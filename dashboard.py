@@ -1,12 +1,14 @@
+import base64
 import copy
 import html
 import json
 import os
 import re
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_DNS, uuid5
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -552,7 +554,7 @@ def render_pda_view_tab() -> None:
     if "pda_selected_trace_id" not in st.session_state:
         st.session_state.pda_selected_trace_id = None
     if "pda_view" not in st.session_state:
-        st.session_state.pda_view = "queue"
+        st.session_state.pda_view = "home"
 
     st.subheader("Frontline PDA — Zebra TC5x Simulator")
     st.caption(
@@ -571,25 +573,28 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 {
     width: 380px !important;
     max-width: 380px !important;
     margin: 0 auto !important;
-    height: 820px !important;
+    height: 650px !important;
+    min-height: 650px !important;
     border: 16px solid #222 !important;
     border-radius: 30px !important;
     background-color: #111 !important;
-    padding: 10px !important;
-    min-height: 600px !important;
+    padding: 10px 10px 5px 10px !important;
 }
 div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 {
     width: 100% !important;
-    height: 680px !important;
+    height: 580px !important;
+    min-height: 580px !important;
     overflow-y: auto !important;
     background-color: #121212 !important;
     border: 1px solid #333 !important;
     border-radius: 4px !important;
     padding: 20px !important;
     padding-bottom: 60px !important;
-    min-height: 500px !important;
     color: #f3f4f6 !important;
     position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
 }
 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar {
     position: absolute !important;
@@ -665,20 +670,20 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-clear {
     padding: 48px 12px;
     line-height: 1.5;
 }
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)),
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)),
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)),
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)) {
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)),
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)),
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)),
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)) {
     background-color: #1a1a1a !important;
     border: 1px solid #22c55e !important;
     color: #22c55e !important;
     border-radius: 6px !important;
     transition: background-color 0.2s ease;
 }
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)):hover,
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)):hover,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)):hover,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)):hover {
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)):hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)):hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)):hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *, .st-key-pda_home_screen *)):hover {
     background-color: rgba(34, 197, 94, 0.15) !important;
     border-color: #4ade80 !important;
     color: #4ade80 !important;
@@ -751,6 +756,38 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid
 div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button p {
     color: #ffffff !important;
 }
+div[data-testid="stVerticalBlock"].st-key-pda_home_screen div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button {
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    font-size: 42px !important;
+    padding: 0 !important;
+    height: auto !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_home_screen div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button:hover {
+    border: 1px solid transparent !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button {
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    font-size: 42px !important;
+    padding: 0 !important;
+    height: auto !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_home_screen div[data-testid="stButton"] > button:hover {
+    border: 1px solid transparent !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -770,17 +807,46 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid
             with st.container(key="pda_hardware_screen_v1"):
                 selected_trace_id = st.session_state.pda_selected_trace_id
 
+                def get_base64_image(image_path: str) -> str:
+                    try:
+                        with open(image_path, "rb") as img_file:
+                            return base64.b64encode(img_file.read()).decode()
+                    except OSError:
+                        return ""
+
+                _pda_assets_dir = Path(__file__).resolve().parent / "assets"
+                wifi_b64 = get_base64_image(str(_pda_assets_dir / "wifi_icon2.png"))
+                battery_b64 = get_base64_image(str(_pda_assets_dir / "battery.png"))
+
+                now = datetime.now(ZoneInfo("Europe/London"))
+                current_time = now.strftime("%H:%M")
+                current_date = now.strftime("%a, %b %d")
+                st.markdown(
+                    f"""
+<div style='display: flex; justify-content: space-between; align-items: center; padding: 4px 15px 0px 15px; color: #9ca3af; font-size: 11px; font-weight: 600;'>
+    <div>{current_time} • {current_date}</div>
+    <div style='display: flex; align-items: center; gap: 6px;'>
+        <img src="data:image/png;base64,{wifi_b64}" style="height: 12px; object-fit: contain;" alt="">
+        <img src="data:image/png;base64,{battery_b64}" style="height: 12px; object-fit: contain;" alt="">
+    </div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
                 if st.session_state.pda_view == "menu":
                     st.markdown(
                         "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>⚙️ Menu</h4>",
                         unsafe_allow_html=True,
                     )
-                elif selected_trace_id is None:
+                elif st.session_state.pda_view == "home":
+                    pass
+                elif st.session_state.pda_view == "queue" and selected_trace_id is None:
                     st.markdown(
                         "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
                         unsafe_allow_html=True,
                     )
-                else:
+                elif st.session_state.pda_view == "queue":
                     st.markdown(
                         "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>🖨️ Print Task</h4>",
                         unsafe_allow_html=True,
@@ -800,10 +866,173 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid
                     ):
                         st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = []
                         st.session_state.pda_selected_trace_id = None
-                        st.session_state.pda_view = "queue"
+                        st.session_state.pda_view = "home"
                         st.toast("Logged out")
                         st.rerun()
-                else:
+                elif st.session_state.pda_view == "home":
+                    _pda_assets_dir = Path(__file__).resolve().parent / "assets"
+                    _pda_print_icon_b64 = base64.b64encode(
+                        (_pda_assets_dir / "printer.png").read_bytes()
+                    ).decode("ascii")
+                    _pda_shelficon_b64 = base64.b64encode(
+                        (_pda_assets_dir / "shelficon.png").read_bytes()
+                    ).decode("ascii")
+                    events_b64 = get_base64_image(str(_pda_assets_dir / "events.png"))
+                    with st.container(key="pda_home_screen"):
+                        st.markdown(
+                            f"""
+<style>
+div[data-testid="stVerticalBlock"].st-key-app_icon_print div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-app_icon_print div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{_pda_print_icon_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-app_icon_print div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-app_icon_print div[data-testid="stButton"] > button:hover {{
+    background-image: url("data:image/png;base64,{_pda_print_icon_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_print div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_print div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{_pda_print_icon_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{_pda_shelficon_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div[data-testid="stButton"] > button:hover {{
+    border: 1px solid transparent !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_fill_wip div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{_pda_shelficon_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{events_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div[data-testid="stButton"] > button:hover {{
+    border: 1px solid transparent !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-app_icon_floor_view div[data-testid="stButton"] > button {{
+    background-image: url("data:image/png;base64,{events_b64}");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 1px solid transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    height: 60px !important;
+    padding: 0 !important;
+    color: transparent !important;
+}}
+</style>
+""",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            "<h4 style='color: #f3f4f6; text-align: center; margin-top: 0; margin-bottom: 20px;'>Home</h4>",
+                            unsafe_allow_html=True,
+                        )
+                        app_col1, app_col2, app_col3 = st.columns(3)
+                        with app_col1:
+                            with st.container(key="app_icon_print"):
+                                if st.button(
+                                    " ",
+                                    key="app_print_tasks",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.pda_view = "queue"
+                                    st.rerun()
+                                st.markdown(
+                                    "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Print Tasks</div>",
+                                    unsafe_allow_html=True,
+                                )
+                        with app_col2:
+                            with st.container(key="app_icon_fill_wip"):
+                                st.button(
+                                    " ",
+                                    key="btn_app_fill_wip",
+                                    use_container_width=True,
+                                )
+                                st.markdown(
+                                    "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Fill WIP</div>",
+                                    unsafe_allow_html=True,
+                                )
+                        with app_col3:
+                            with st.container(key="app_icon_floor_view"):
+                                st.button(
+                                    " ",
+                                    key="btn_app_floor_view",
+                                    use_container_width=True,
+                                )
+                                st.markdown(
+                                    "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Floor View</div>",
+                                    unsafe_allow_html=True,
+                                )
+                elif st.session_state.pda_view == "queue":
                     if selected_trace_id is None:
                         if not pending_tasks:
                             st.markdown(
@@ -890,7 +1119,7 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid
                             st.rerun()
                     with home_col:
                         if st.button("◯", key="nav_home", use_container_width=True):
-                            st.session_state.pda_view = "queue"
+                            st.session_state.pda_view = "home"
                             st.session_state.pda_selected_trace_id = None
                             st.rerun()
                     with menu_col:
