@@ -584,7 +584,8 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 {
     width: 100% !important;
     height: 580px !important;
     min-height: 580px !important;
-    overflow-y: auto !important;
+    max-height: 580px !important;
+    overflow: hidden !important;
     background-color: #121212 !important;
     border: 1px solid #333 !important;
     border-radius: 4px !important;
@@ -841,6 +842,14 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                     )
                 elif st.session_state.pda_view == "home":
                     pass
+                elif st.session_state.pda_view == "floor_view":
+                    pass
+                elif st.session_state.pda_view == "epw_detail":
+                    pass
+                elif st.session_state.pda_view == "visitor_detail":
+                    pass
+                elif st.session_state.pda_view == "history":
+                    pass
                 elif st.session_state.pda_view == "queue" and selected_trace_id is None:
                     st.markdown(
                         "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
@@ -1023,15 +1032,385 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                                 )
                         with app_col3:
                             with st.container(key="app_icon_floor_view"):
-                                st.button(
+                                if st.button(
                                     " ",
                                     key="btn_app_floor_view",
                                     use_container_width=True,
-                                )
+                                ):
+                                    st.session_state.pda_view = "floor_view"
+                                    st.rerun()
                                 st.markdown(
                                     "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Floor View</div>",
                                     unsafe_allow_html=True,
                                 )
+                elif st.session_state.pda_view == "floor_view":
+                    st.markdown(
+                        """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>Floor View</h3>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    card_style = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                        "margin-bottom: 8px; display: flex; justify-content: space-between; "
+                        "align-items: center; background-color: #1f2937;"
+                    )
+                    title_style = (
+                        "font-weight: 600; font-size: 14px; color: #f9fafb; margin-bottom: 3px;"
+                    )
+                    sub_style = "font-size: 13px; color: #9ca3af;"
+                    icon_style = (
+                        "display: flex; gap: 12px; font-size: 16px; color: #9ca3af; "
+                        "align-items: center;"
+                    )
+
+                    st.markdown(
+                        """
+<style>
+div[data-testid="stVerticalBlock"].st-key-floor_scroll_container {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 80px !important;
+}
+div[data-testid="stVerticalBlock"].st-key-floor_scroll_container::-webkit-scrollbar {
+    display: none;
+}
+div.st-key-btn_epw_detail {
+    margin-top: -68px !important;
+    margin-bottom: -15px !important;
+    position: relative;
+    z-index: 99;
+}
+div.st-key-btn_epw_detail button {
+    height: 68px !important;
+    opacity: 0 !important;
+    cursor: pointer;
+}
+</style>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.container(key="floor_scroll_container"):
+                        st.markdown(
+                            f"""
+<div style='{card_style} height: 68px; box-sizing: border-box; margin-bottom: 0px;'>
+    <div>
+        <div style='{title_style}'>EPW - ITEM 2</div>
+        <div style='{sub_style}'>Outstanding</div>
+    </div>
+    <div style='display: flex; gap: 12px; font-size: 16px; color: #9ca3af; align-items: center;'><span>→</span></div>
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        if st.button(" ", key="btn_epw_detail", use_container_width=True):
+                            st.session_state.pda_view = "epw_detail"
+                            st.rerun()
+
+                        st.markdown(
+                            f"""
+<div style='{card_style}'>
+    <div>
+        <div style='{title_style}'>Fill - R, m2, sE, p3</div>
+        <div style='{sub_style}'>Crisps</div>
+    </div>
+    <div style='{icon_style}'><span>👁️</span><span>→</span></div>
+</div>
+<div style='{card_style}'>
+    <div>
+        <div style='{title_style}'>Logbook - PM</div>
+        <div style='{sub_style}'>Outstanding</div>
+    </div>
+    <div style='{icon_style}'><span>→</span></div>
+</div>
+<div style='{card_style}'>
+    <div>
+        <div style='{title_style}'>Whoosh Order: 6032 - 902</div>
+        <div style='{sub_style}'>Currently Picking</div>
+    </div>
+</div>
+<div style='{card_style}'>
+    <div>
+        <div style='{title_style}'>Whoosh Order: 6032 - 902</div>
+        <div style='{sub_style}'>Driver Arrived</div>
+    </div>
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        st.markdown(
+                            f"""
+<div style='{card_style} height: 68px; box-sizing: border-box; margin-bottom: 0px;'>
+    <div>
+        <div style='{title_style}'>Visitor 1 - JTI Tobacco</div>
+        <div style='{sub_style}'>In-Store</div>
+    </div>
+    <div style='{icon_style}'><span style='font-size: 20px;'>🪪</span></div>
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        st.markdown(
+                            """
+<style>
+div.st-key-btn_visitor_detail {
+    margin-top: -68px !important;
+    margin-bottom: -35px !important; /* Pulls the EPW card up to perfectly match the standard gap */
+    position: relative;
+    z-index: 99;
+}
+div.st-key-btn_visitor_detail button {
+    height: 68px !important;
+    opacity: 0 !important;
+    cursor: pointer;
+}
+</style>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        if st.button(" ", key="btn_visitor_detail", use_container_width=True):
+                            st.session_state.pda_view = "visitor_detail"
+                            st.rerun()
+
+                        st.markdown(
+                            f"""
+<div style='{card_style}'>
+    <div>
+        <div style='{title_style}'>EPW - ITEM 1</div>
+        <div style='{sub_style}'>Completed: 13:12</div>
+    </div>
+    <div style='{icon_style}'><span>👁️</span></div>
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+                elif st.session_state.pda_view == "epw_detail":
+                    st.markdown(
+                        """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>EPW</h3>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    card_style = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                        "margin-bottom: 8px; display: flex; justify-content: space-between; "
+                        "align-items: center; background-color: #1f2937;"
+                    )
+                    detail_card = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 15px; "
+                        "background-color: #1f2937; color: #f9fafb;"
+                    )
+                    bold_text = (
+                        "font-weight: 600; font-size: 14px; margin-top: 10px; margin-bottom: 2px;"
+                    )
+                    norm_text = "font-size: 14px; color: #d1d5db; margin-bottom: 10px;"
+
+                    st.markdown(
+                        """
+<style>
+.pda-scroller {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.pda-scroller::-webkit-scrollbar {
+    display: none;
+}
+</style>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown(
+                        f"""
+<div class="pda-scroller">
+    <div style='{card_style}'>
+        <div>
+            <div style='font-weight: 600; font-size: 15px; color: #f9fafb; margin-bottom: 3px;'>EPW - ITEM</div>
+            <div style='font-size: 14px; color: #9ca3af;'>Completed 13:12</div>
+        </div>
+        <div style='font-size: 20px; color: #9ca3af;'>📤</div>
+    </div>
+    <div style='{detail_card}'>
+        <div style='{bold_text}; margin-top: 0;'>ITEM:</div>
+        <div style='{norm_text}'>Crisps</div>
+        <div style='{bold_text}'>BATCH CODE:</div>
+        <div style='{norm_text}'>010341</div>
+        <div style='{bold_text}'>DATE CODE:</div>
+        <div style='{norm_text}'>08-26</div>
+        <div style='{bold_text}'>REASON:</div>
+        <div style='{norm_text}'>Quality</div>
+        <div style='{bold_text}'>ACTION:</div>
+        <div style='{norm_text}'>Isolate and hold</div>
+        <div style='{bold_text}'>STOCK:</div>
+        <div style='{norm_text}; margin-bottom: 0;'>1 Case 2 singles</div>
+    </div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+                elif st.session_state.pda_view == "visitor_detail":
+                    st.markdown(
+                        """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>Visitor</h3>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    card_style = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                        "margin-bottom: 8px; display: flex; justify-content: space-between; "
+                        "align-items: center; background-color: #1f2937;"
+                    )
+                    detail_card = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 15px; "
+                        "margin-bottom: 8px; background-color: #1f2937; color: #f9fafb;"
+                    )
+                    bold_text = (
+                        "font-weight: 600; font-size: 14px; margin-top: 10px; margin-bottom: 2px;"
+                    )
+                    norm_text = "font-size: 14px; color: #d1d5db; margin-bottom: 10px;"
+
+                    st.markdown(
+                        """
+<style>
+.pda-scroller {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.pda-scroller::-webkit-scrollbar {
+    display: none;
+}
+</style>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown(
+                        f"""
+<div class="pda-scroller">
+    <div style='{card_style}'>
+        <div>
+            <div style='font-weight: 600; font-size: 15px; color: #f9fafb; margin-bottom: 3px;'>Visitor 1 - JTI Tobacco</div>
+            <div style='font-size: 14px; color: #9ca3af;'>In-Store</div>
+        </div>
+        <div style='font-size: 20px; color: #9ca3af;'>📤</div>
+    </div>
+    <div style='{detail_card} display: flex; justify-content: space-around; padding: 12px;'>
+        <div><span style='font-weight: 600;'>IN:</span> <span style='color: #d1d5db;'>15:15</span></div>
+        <div><span style='font-weight: 600;'>OUT:</span> <span style='color: #d1d5db;'>17:00</span></div>
+    </div>
+    <div style='{detail_card}'>
+        <div style='{bold_text}; margin-top: 0;'>Name:</div>
+        <div style='{norm_text}'>Visitor 1</div>
+        <div style='{bold_text}'>Reason:</div>
+        <div style='{norm_text}; margin-bottom: 0;'>Range Check</div>
+    </div>
+    <div style='{detail_card} text-align: center;'>
+        <div style='font-size: 18px; margin-bottom: 10px; color: #f9fafb;'>Picture of ID</div>
+        <div style='font-size: 60px; line-height: 1; color: #d1d5db;'>🪪</div>
+    </div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+                elif st.session_state.pda_view == "history":
+                    st.markdown(
+                        """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>History</h3>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    card_style = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                        "margin-bottom: 8px; display: flex; justify-content: space-between; "
+                        "align-items: center; background-color: #1f2937; opacity: 0.75;"
+                    )
+                    title_style = (
+                        "font-weight: 600; font-size: 14px; color: #f9fafb; margin-bottom: 3px;"
+                    )
+                    sub_style = "font-size: 13px; color: #9ca3af;"
+
+                    st.markdown(
+                        """
+<style>
+.pda-scroller {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.pda-scroller::-webkit-scrollbar {
+    display: none;
+}
+</style>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown(
+                        f"""
+<div class="pda-scroller">
+    <div style='{card_style}'>
+        <div>
+            <div style='{title_style}'>Damage - Multipack Crisps</div>
+            <div style='{sub_style}'>Reconciled via Edge Engine: 23:45</div>
+        </div>
+        <div style='{title_style}'>✓</div>
+    </div>
+    <div style='{card_style}'>
+        <div>
+            <div style='{title_style}'>Fill - R, m2, sE, p3</div>
+            <div style='{sub_style}'>Completed: 23:15</div>
+        </div>
+        <div style='{title_style}'>✓</div>
+    </div>
+    <div style='{card_style}'>
+        <div>
+            <div style='{title_style}'>Whoosh Order: 6032 - 901</div>
+            <div style='{sub_style}'>Dispatched: 22:30</div>
+        </div>
+        <div style='{title_style}'>✓</div>
+    </div>
+    <div style='{card_style}'>
+        <div>
+            <div style='{title_style}'>EPW - ITEM 1</div>
+            <div style='{sub_style}'>Removed from Shop Floor: 13:12</div>
+        </div>
+        <div style='{title_style}'>✓</div>
+    </div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
                 elif st.session_state.pda_view == "queue":
                     if selected_trace_id is None:
                         if not pending_tasks:
@@ -1114,8 +1493,15 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                     )
                     back_col, home_col, menu_col = st.columns(3)
                     with back_col:
-                        if st.button("◁", key="nav_back", use_container_width=True):
-                            st.session_state.pda_selected_trace_id = None
+                        if st.button("◁", key="btn_nav_back", use_container_width=True):
+                            if st.session_state.pda_view in (
+                                "history",
+                                "epw_detail",
+                                "visitor_detail",
+                            ):
+                                st.session_state.pda_view = "floor_view"
+                            elif st.session_state.pda_view == "floor_view":
+                                st.session_state.pda_view = "home"
                             st.rerun()
                     with home_col:
                         if st.button("◯", key="nav_home", use_container_width=True):
@@ -1123,12 +1509,11 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                             st.session_state.pda_selected_trace_id = None
                             st.rerun()
                     with menu_col:
-                        if st.button("≡", key="nav_menu", use_container_width=True):
-                            st.session_state.pda_view = (
-                                "queue"
-                                if st.session_state.pda_view == "menu"
-                                else "menu"
-                            )
+                        if st.button("≡", key="btn_nav_menu", use_container_width=True):
+                            if st.session_state.pda_view == "history":
+                                st.session_state.pda_view = "floor_view"
+                            else:
+                                st.session_state.pda_view = "history"
                             st.rerun()
 
 
