@@ -551,6 +551,8 @@ def _pda_price_button_label(row: dict) -> str:
 def render_pda_view_tab() -> None:
     if "pda_selected_trace_id" not in st.session_state:
         st.session_state.pda_selected_trace_id = None
+    if "pda_view" not in st.session_state:
+        st.session_state.pda_view = "queue"
 
     st.subheader("Frontline PDA — Zebra TC5x Simulator")
     st.caption(
@@ -584,8 +586,19 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 {
     border: 1px solid #333 !important;
     border-radius: 4px !important;
     padding: 20px !important;
+    padding-bottom: 60px !important;
     min-height: 500px !important;
     color: #f3f4f6 !important;
+    position: relative !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_nav_bar {
+    position: absolute !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    padding: 10px 15px !important;
+    background-color: #121212 !important;
+    z-index: 10;
 }
 div[data-testid="stVerticalBlock"].st-key-pda_hardware_shell_v1 .pda-hw-bezel {
     padding: 8px 0 12px;
@@ -652,20 +665,20 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 .pda-hw-clear {
     padding: 48px 12px;
     line-height: 1.5;
 }
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button,
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button {
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)),
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)),
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)),
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)) {
     background-color: #1a1a1a !important;
     border: 1px solid #22c55e !important;
     color: #22c55e !important;
     border-radius: 6px !important;
     transition: background-color 0.2s ease;
 }
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:hover,
-div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:hover,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:hover,
-div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:hover {
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)):hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)):hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > button:not(:is(.st-key-pda_nav_bar *)):hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] > button:not(:is(.st-key-pda_nav_bar *)):hover {
     background-color: rgba(34, 197, 94, 0.15) !important;
     border-color: #4ade80 !important;
     color: #4ade80 !important;
@@ -693,6 +706,51 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div.stButton > 
 div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stButton"] {
     margin-bottom: 8px;
 }
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) .st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) .st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) .st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) .st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) .st-key-pda_nav_bar div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) .st-key-pda_nav_bar div[data-testid="stButton"] > button {
+    border: none !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(1) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(2) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stHorizontalBlock"]:not(:has(div[data-testid="stHorizontalBlock"])) > div:nth-child(3) .st-key-pda_nav_bar div[data-testid="stButton"] > button:hover {
+    border: none !important;
+    border-color: transparent !important;
+    color: #ffffff !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+}
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div[data-testid="stButton"] > button p,
+div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid="stVerticalBlock"].st-key-pda_nav_bar div.stButton > button p {
+    color: #ffffff !important;
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -712,81 +770,137 @@ div[data-testid="stVerticalBlock"].st-key-pda_hardware_screen_v1 div[data-testid
             with st.container(key="pda_hardware_screen_v1"):
                 selected_trace_id = st.session_state.pda_selected_trace_id
 
-                if selected_trace_id is None:
-                    if not pending_tasks:
-                        st.markdown(
-                            '<p class="pda-hw-clear">✅ No pending tasks. Shop floor is clear.</p>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(
-                            "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
-                            unsafe_allow_html=True,
-                        )
-                        for task_row in pending_tasks:
-                            trace_id = _pda_trace_id(task_row)
-                            if st.button(
-                                _pda_price_button_label(task_row),
-                                key=f"select_{trace_id}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.pda_selected_trace_id = trace_id
-                                st.rerun()
-                else:
-                    pending_task = next(
-                        (
-                            row
-                            for row in pending_tasks
-                            if _pda_trace_id(row) == selected_trace_id
-                        ),
-                        None,
-                    )
-                    if pending_task is None:
-                        st.session_state.pda_selected_trace_id = None
-                        st.rerun()
-
-                    if st.button(
-                        "⬅️ Back to Queue",
-                        key="pda_back_to_queue",
-                        type="secondary",
-                        use_container_width=True,
-                    ):
-                        st.session_state.pda_selected_trace_id = None
-                        st.rerun()
-
-                    item_name = html.escape(_pda_item_name(pending_task))
-                    markdown_price = _pda_markdown_price(pending_task)
-                    price_display = (
-                        html.escape(f"£{markdown_price:.2f}")
-                        if markdown_price is not None
-                        else html.escape("—")
-                    )
-                    printer_target = html.escape(_pda_printer_target(pending_task))
-                    trace_id = _pda_trace_id(pending_task)
-
+                if st.session_state.pda_view == "menu":
                     st.markdown(
-                        f'<div class="pda-hw-warning">⚠️ PRINTER DISPATCH REQUIRED</div>'
-                        f'<p class="pda-hw-label">Product</p>'
-                        f'<p class="pda-hw-value">{item_name}</p>'
-                        f'<p class="pda-hw-label">Price</p>'
-                        f'<p class="pda-hw-value price">{price_display}</p>'
-                        f'<p class="pda-hw-label">Routing</p>'
-                        f'<p class="pda-hw-value">{printer_target}</p>',
+                        "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>⚙️ Menu</h4>",
+                        unsafe_allow_html=True,
+                    )
+                elif selected_trace_id is None:
+                    st.markdown(
+                        "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>🖨️ Print Task</h4>",
                         unsafe_allow_html=True,
                     )
 
+                if st.session_state.pda_view == "menu":
                     if st.button(
-                        "CONFIRM & PRINT ZPL",
+                        "📜 Print History",
+                        key="pda_menu_print_history",
                         use_container_width=True,
-                        type="primary",
-                        key=f"pda_confirm_print_{trace_id or 'latest'}",
                     ):
-                        if trace_id:
-                            cleared.add(trace_id)
-                            st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = sorted(cleared)
+                        st.toast("History view coming soon")
+                    if st.button(
+                        "🚪 Log Out",
+                        key="pda_menu_log_out",
+                        use_container_width=True,
+                    ):
+                        st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = []
                         st.session_state.pda_selected_trace_id = None
-                        st.toast("ZPL Payload Dispatched to Printer")
+                        st.session_state.pda_view = "queue"
+                        st.toast("Logged out")
                         st.rerun()
+                else:
+                    if selected_trace_id is None:
+                        if not pending_tasks:
+                            st.markdown(
+                                '<p class="pda-hw-clear">✅ No pending tasks. Shop floor is clear.</p>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            for task_row in pending_tasks:
+                                trace_id = _pda_trace_id(task_row)
+                                if st.button(
+                                    _pda_price_button_label(task_row),
+                                    key=f"select_{trace_id}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.pda_selected_trace_id = trace_id
+                                    st.rerun()
+                    else:
+                        pending_task = next(
+                            (
+                                row
+                                for row in pending_tasks
+                                if _pda_trace_id(row) == selected_trace_id
+                            ),
+                            None,
+                        )
+                        if pending_task is None:
+                            st.session_state.pda_selected_trace_id = None
+                            st.rerun()
+
+                        if st.button(
+                            "⬅️ Back to Queue",
+                            key="pda_back_to_queue",
+                            type="secondary",
+                            use_container_width=True,
+                        ):
+                            st.session_state.pda_selected_trace_id = None
+                            st.rerun()
+
+                        item_name = html.escape(_pda_item_name(pending_task))
+                        markdown_price = _pda_markdown_price(pending_task)
+                        price_display = (
+                            html.escape(f"£{markdown_price:.2f}")
+                            if markdown_price is not None
+                            else html.escape("—")
+                        )
+                        printer_target = html.escape(_pda_printer_target(pending_task))
+                        trace_id = _pda_trace_id(pending_task)
+
+                        st.markdown(
+                            f'<div class="pda-hw-warning">⚠️ PRINTER DISPATCH REQUIRED</div>'
+                            f'<p class="pda-hw-label">Product</p>'
+                            f'<p class="pda-hw-value">{item_name}</p>'
+                            f'<p class="pda-hw-label">Price</p>'
+                            f'<p class="pda-hw-value price">{price_display}</p>'
+                            f'<p class="pda-hw-label">Routing</p>'
+                            f'<p class="pda-hw-value">{printer_target}</p>',
+                            unsafe_allow_html=True,
+                        )
+
+                        if st.button(
+                            "CONFIRM & PRINT ZPL",
+                            use_container_width=True,
+                            type="primary",
+                            key=f"pda_confirm_print_{trace_id or 'latest'}",
+                        ):
+                            if trace_id:
+                                cleared.add(trace_id)
+                                st.session_state[PDA_CLEARED_TRACE_IDS_KEY] = sorted(
+                                    cleared
+                                )
+                            st.session_state.pda_selected_trace_id = None
+                            st.toast("ZPL Payload Dispatched to Printer")
+                            st.rerun()
+
+                with st.container(key="pda_nav_bar"):
+                    st.markdown(
+                        "<hr style='margin: 0; border-color: #333;'>",
+                        unsafe_allow_html=True,
+                    )
+                    back_col, home_col, menu_col = st.columns(3)
+                    with back_col:
+                        if st.button("◁", key="nav_back", use_container_width=True):
+                            st.session_state.pda_selected_trace_id = None
+                            st.rerun()
+                    with home_col:
+                        if st.button("◯", key="nav_home", use_container_width=True):
+                            st.session_state.pda_view = "queue"
+                            st.session_state.pda_selected_trace_id = None
+                            st.rerun()
+                    with menu_col:
+                        if st.button("≡", key="nav_menu", use_container_width=True):
+                            st.session_state.pda_view = (
+                                "queue"
+                                if st.session_state.pda_view == "menu"
+                                else "menu"
+                            )
+                            st.rerun()
 
 
 def _bouncer_product_display_name(row: dict) -> str:
