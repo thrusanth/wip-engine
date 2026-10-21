@@ -550,6 +550,59 @@ def _pda_price_button_label(row: dict) -> str:
     return f"🖨️ {_pda_item_name(row)} - {price_text}"
 
 
+def _sync_system_overview_backlog_from_flattops() -> None:
+    """Mirror System Overview baseline backlog into session for PDA Fill WIP."""
+    containers = st.session_state.get(_DASHBOARD_CONTAINERS_KEY, {})
+    all_cards = _build_flattop_cards_from_queue(containers)
+    _, baseline_cards = _partition_flattop_cards_for_overview(all_cards)
+    baseline_cards = _sort_flattop_cards_by_fleet_id(baseline_cards)
+    backlog: list[dict] = []
+    for card in baseline_cards:
+        ft_id = card["container_id"]
+        status = card.get("status", md.FLATTOP_STATUS_RESOLVED_HISTORICAL)
+        manifest_key = card.get("manifest_instance_id") or ft_id
+        sku_lines = card.get("sku_lines") or [{}]
+        line_total = len(sku_lines)
+        zone_base = card.get("zone", "Abandoned Flattop")
+        zone_info = (
+            f"{zone_base} | {line_total} SKU{'s' if line_total != 1 else ''} on display"
+        )
+        audit_text = (
+            "Resolved historical manifest — read-only audit trail."
+            if status == md.FLATTOP_STATUS_RESOLVED_HISTORICAL
+            else ""
+        )
+        task_uid = compact_instance_id_for_display(str(manifest_key))
+        for sku_line in sku_lines:
+            resolution_type = sku_line.get("resolution_type")
+            display_status = status
+            if sku_line.get("is_resolved") and resolution_type == "none":
+                display_status = "SHRINK_CONFIRMED"
+            backlog.append(
+                {
+                    "flattop_id": ft_id,
+                    "sku": sku_line.get("name")
+                    or sku_line.get("sku", "Unknown SKU"),
+                    "ean": sku_line.get("ean", "0000000000000"),
+                    "expected": sku_line.get("expected", 0),
+                    "worked": sku_line.get("worked", 0),
+                    "backstock": sku_line.get("backstock", 0),
+                    "phantom_drift": sku_line.get("drift", 0),
+                    "variance": sku_line.get("unaccounted_variance", 0),
+                    "status": display_status,
+                    "zone": zone_info,
+                    "audit_text": audit_text,
+                    "id": task_uid,
+                    "resolution_type": resolution_type,
+                }
+            )
+    overview = st.session_state.get("system_overview")
+    if not isinstance(overview, dict):
+        overview = {}
+    overview["backlog"] = backlog
+    st.session_state["system_overview"] = overview
+
+
 def render_pda_view_tab() -> None:
     if "pda_selected_trace_id" not in st.session_state:
         st.session_state.pda_selected_trace_id = None
@@ -850,16 +903,18 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                     pass
                 elif st.session_state.pda_view == "history":
                     pass
-                elif st.session_state.pda_view == "queue" and selected_trace_id is None:
-                    st.markdown(
-                        "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>📋 Pending Print Tasks</h4>",
-                        unsafe_allow_html=True,
-                    )
-                elif st.session_state.pda_view == "queue":
+                elif (
+                    st.session_state.pda_view == "print_tasks"
+                    and selected_trace_id is not None
+                ):
                     st.markdown(
                         "<h4 class='pda-hw-pending-title' style='color: #f3f4f6 !important; text-align: center; margin-bottom: 20px;'>🖨️ Print Task</h4>",
                         unsafe_allow_html=True,
                     )
+                elif st.session_state.pda_view == "print_tasks":
+                    pass
+                elif st.session_state.pda_view == "fill_wip":
+                    pass
 
                 if st.session_state.pda_view == "menu":
                     if st.button(
@@ -1013,7 +1068,7 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                                     key="app_print_tasks",
                                     use_container_width=True,
                                 ):
-                                    st.session_state.pda_view = "queue"
+                                    st.session_state.pda_view = "print_tasks"
                                     st.rerun()
                                 st.markdown(
                                     "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Print Tasks</div>",
@@ -1021,11 +1076,13 @@ div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stVerti
                                 )
                         with app_col2:
                             with st.container(key="app_icon_fill_wip"):
-                                st.button(
+                                if st.button(
                                     " ",
                                     key="btn_app_fill_wip",
                                     use_container_width=True,
-                                )
+                                ):
+                                    st.session_state.pda_view = "fill_wip"
+                                    st.rerun()
                                 st.markdown(
                                     "<div style='text-align: center; color: #f3f4f6; font-size: 13px; margin-top: -12px;'>Fill WIP</div>",
                                     unsafe_allow_html=True,
@@ -1411,23 +1468,102 @@ div.st-key-btn_visitor_detail button {
 """,
                         unsafe_allow_html=True,
                     )
-                elif st.session_state.pda_view == "queue":
+                elif st.session_state.pda_view == "print_tasks":
                     if selected_trace_id is None:
+                        st.markdown(
+                            """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>📋 Pending Print Tasks</h3>
+</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        card_style = (
+                            "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                            "margin-bottom: 8px; display: flex; justify-content: space-between; "
+                            "align-items: center; background-color: #1f2937;"
+                        )
+                        title_style = (
+                            "font-weight: 600; font-size: 14px; color: #f9fafb; "
+                            "margin-bottom: 3px;"
+                        )
+                        sub_style = "font-size: 13px; color: #9ca3af;"
+                        icon_style = (
+                            "display: flex; gap: 12px; font-size: 16px; color: #9ca3af; "
+                            "align-items: center;"
+                        )
+
+                        st.markdown(
+                            """
+<style>
+div[data-testid="stVerticalBlock"].st-key-print_scroll_container {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+div[data-testid="stVerticalBlock"].st-key-print_scroll_container::-webkit-scrollbar {
+    display: none;
+}
+div[class*="st-key-btn_print_"] {
+    margin-top: -68px !important;
+    margin-bottom: -15px !important;
+    position: relative;
+    z-index: 99;
+}
+div[class*="st-key-btn_print_"] button {
+    height: 68px !important;
+    opacity: 0 !important;
+    cursor: pointer;
+}
+</style>
+""",
+                            unsafe_allow_html=True,
+                        )
+
                         if not pending_tasks:
                             st.markdown(
                                 '<p class="pda-hw-clear">✅ No pending tasks. Shop floor is clear.</p>',
                                 unsafe_allow_html=True,
                             )
                         else:
-                            for task_row in pending_tasks:
-                                trace_id = _pda_trace_id(task_row)
-                                if st.button(
-                                    _pda_price_button_label(task_row),
-                                    key=f"select_{trace_id}",
-                                    use_container_width=True,
-                                ):
-                                    st.session_state.pda_selected_trace_id = trace_id
-                                    st.rerun()
+                            with st.container(key="print_scroll_container"):
+                                for task_index, task_row in enumerate(pending_tasks):
+                                    trace_id = _pda_trace_id(task_row)
+                                    item_name = html.escape(_pda_item_name(task_row))
+                                    markdown_price = _pda_markdown_price(task_row)
+                                    price_display = (
+                                        html.escape(f"£{markdown_price:.2f}")
+                                        if markdown_price is not None
+                                        else html.escape("—")
+                                    )
+                                    btn_key = f"btn_print_{task_index + 1}"
+
+                                    st.markdown(
+                                        f"""
+<div style='{card_style} height: 68px; box-sizing: border-box; margin-bottom: 0px;'>
+    <div>
+        <div style='{title_style}'>{item_name}</div>
+        <div style='{sub_style}'>{price_display}</div>
+    </div>
+    <div style='{icon_style}'><span>🖨️</span><span>→</span></div>
+</div>
+""",
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    if st.button(
+                                        " ",
+                                        key=btn_key,
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state.pda_selected_trace_id = (
+                                            trace_id
+                                        )
+                                        st.rerun()
                     else:
                         pending_task = next(
                             (
@@ -1486,6 +1622,158 @@ div.st-key-btn_visitor_detail button {
                             st.toast("ZPL Payload Dispatched to Printer")
                             st.rerun()
 
+                elif st.session_state.pda_view == "fill_wip":
+                    _sync_system_overview_backlog_from_flattops()
+
+                    st.markdown(
+                        """
+<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; margin-top: 5px; padding: 0 5px;'>
+    <h3 style='margin: 0; color: #f9fafb; font-size: 22px;'>Fill WIP</h3>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    card_style = (
+                        "border: 1px solid #374151; border-radius: 6px; padding: 12px; "
+                        "margin-bottom: 8px; background-color: #1f2937;"
+                    )
+                    pill_style = (
+                        "border: 1px solid #4b5563; padding: 2px 6px; border-radius: 12px; "
+                        "font-size: 11px; color: #9ca3af;"
+                    )
+                    metric_label = (
+                        "font-size: 11px; color: #6b7280; margin-bottom: 2px;"
+                    )
+                    metric_val = (
+                        "font-size: 14px; font-weight: 600; color: #f9fafb; "
+                        "margin-bottom: 8px;"
+                    )
+                    success_banner = (
+                        "background-color: #14532d; color: #86efac; padding: 10px; "
+                        "border-radius: 4px; font-size: 12px; display: flex; "
+                        "align-items: center; gap: 8px; margin-top: 5px;"
+                    )
+
+                    st.markdown(
+                        """
+<style>
+div[data-testid="stVerticalBlock"].st-key-fill_scroll_container {
+    max-height: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
+    padding-bottom: 80px !important;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+div[data-testid="stVerticalBlock"].st-key-fill_scroll_container::-webkit-scrollbar {
+    display: none;
+}
+</style>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.container(key="fill_scroll_container"):
+                        st.markdown(
+                            '<div class="pda-scroller">', unsafe_allow_html=True
+                        )
+
+                        backlog_tasks = st.session_state.get(
+                            "system_overview", {}
+                        ).get("backlog", [])
+
+                        if not backlog_tasks:
+                            st.markdown(
+                                "<div style='color: #9ca3af; text-align: center; margin-top: 20px;'>"
+                                "No backlog tasks found in System Overview.</div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            for idx, task in enumerate(backlog_tasks):
+                                ft_id = html.escape(
+                                    str(task.get("flattop_id", f"FT-0{idx + 2}"))
+                                )
+                                sku_name = html.escape(
+                                    str(task.get("sku", "Unknown SKU"))
+                                )
+                                ean = html.escape(
+                                    str(task.get("ean", "0000000000000"))
+                                )
+                                expected = task.get("expected", 0)
+                                worked = task.get("worked", 0)
+                                backstock = task.get("backstock", 0)
+                                drift = task.get("phantom_drift", 0)
+                                variance = task.get("variance", 0)
+                                status = str(
+                                    task.get("status", "RESOLVED_HISTORICAL")
+                                )
+                                audit_text = html.escape(
+                                    str(
+                                        task.get(
+                                            "audit_text",
+                                            "Resolved historical manifest — read-only audit trail.",
+                                        )
+                                    )
+                                )
+                                task_uid = html.escape(
+                                    str(task.get("id", f"seq006{idx}-795dcf"))
+                                )
+                                zone_info = html.escape(
+                                    str(
+                                        task.get(
+                                            "zone",
+                                            "Abandoned Flattop | 1 SKU on display",
+                                        )
+                                    )
+                                )
+                                status_display = html.escape(status)
+
+                                if (
+                                    drift > 0
+                                    or variance > 0
+                                    or status == "SHRINK_CONFIRMED"
+                                ):
+                                    banner = (
+                                        "<div style='background-color: #7f1d1d; color: #fca5a5; "
+                                        "padding: 10px; border-radius: 4px; font-size: 11px; "
+                                        "display: flex; align-items: center; gap: 8px; "
+                                        "margin-top: 5px;'><span>🚨</span> Shrink Confirmed: "
+                                        "Units officially lost/unaccounted.</div>"
+                                    )
+                                else:
+                                    banner = (
+                                        f"<div style='{success_banner}'>"
+                                        "<span>✅</span> Resolved: All units recovered "
+                                        "and accounted for.</div>"
+                                    )
+
+                                st.markdown(
+                                    f"""
+<div style='{card_style}'>
+    <div style='font-size: 16px; font-weight: 600; color: #f9fafb; margin-bottom: 6px;'>Execution Telemetry: {ft_id}</div>
+    <div style='font-size: 11px; color: #9ca3af; margin-bottom: 8px;'><span style='border: 1px solid #4b5563; padding: 2px 6px; border-radius: 12px; color: #9ca3af;'>ID: {task_uid}</span></div>
+    <div style='font-size: 12px; color: #9ca3af; margin-bottom: 8px;'>{audit_text}</div>
+    <div style='font-size: 11px; color: #9ca3af; margin-bottom: 12px; line-height: 1.4;'>Last Known State: {status_display} | Zone: {zone_info}</div>
+    <div style='font-size: 14px; font-weight: 600; color: #f9fafb; margin-bottom: 6px;'>SKU Profile: {sku_name}</div>
+    <div style='display: flex; gap: 8px; margin-bottom: 15px;'>
+        <span style='{pill_style}'>EAN {ean}</span>
+    </div>
+    <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 5px;'>
+        <div><div style='{metric_label}'>Expected Quantity</div><div style='{metric_val}'>{expected}</div></div>
+        <div><div style='{metric_label}'>Worked to Shelf</div><div style='{metric_val}'>{worked}</div></div>
+        <div><div style='{metric_label}'>Sent to Backstock</div><div style='{metric_val}'>{backstock}</div></div>
+        <div><div style='{metric_label}'>Phantom Drift</div><div style='{metric_val}'>{drift}</div></div>
+    </div>
+    <div><div style='{metric_label}'>Unaccounted Variance</div><div style='{metric_val}'>{variance}</div></div>
+    {banner}
+</div>
+""",
+                                    unsafe_allow_html=True,
+                                )
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+
                 with st.container(key="pda_nav_bar"):
                     st.markdown(
                         "<hr style='margin: 0; border-color: #333;'>",
@@ -1501,6 +1789,8 @@ div.st-key-btn_visitor_detail button {
                             ):
                                 st.session_state.pda_view = "floor_view"
                             elif st.session_state.pda_view == "floor_view":
+                                st.session_state.pda_view = "home"
+                            elif st.session_state.pda_view == "fill_wip":
                                 st.session_state.pda_view = "home"
                             st.rerun()
                     with home_col:
