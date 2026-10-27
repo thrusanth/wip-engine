@@ -26,6 +26,17 @@ def _luna_catalog_key_options() -> list[str]:
     return list(CV_PRODUCT_CATALOG.keys()) + [LUNA_UNKNOWN_CATALOG_KEY]
 
 
+# Visual disambiguation: logistical wrap vs retail multipack for the British water SKUs.
+LUNA_WATER_CLASSIFICATION_RULES = (
+    "Water classification rules (do not confuse logistical packs with retail multipacks): "
+    "IF the bottles are wrapped in completely clear, transparent plastic "
+    "(often with a white logistical barcode sticker), classify it as the single item: "
+    "british_mineral_water_2l. "
+    "IF the bottles are wrapped in branded, opaque blue plastic with the Tesco logo "
+    "covering the middle, classify it as the multipack: british_mineral_water_6x2l. "
+)
+
+
 def _build_luna_system_prompt() -> str:
     keys = _luna_catalog_key_options()
     catalog_lines = "\n".join(
@@ -46,6 +57,7 @@ def _build_luna_system_prompt() -> str:
         "You must classify the damaged item by selecting the exact matching key or name "
         "from this provided catalog list:\n"
         f"{catalog_lines}\n"
+        f"{LUNA_WATER_CLASSIFICATION_RULES}"
         f'Use catalog_key "{LUNA_UNKNOWN_CATALOG_KEY}" only when no catalog entry matches. '
         "Prefer returning the catalog slug key when confident. "
         "Do not include any other keys or prose."
