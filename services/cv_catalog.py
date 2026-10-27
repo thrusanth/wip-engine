@@ -152,6 +152,22 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-04",
     },
+    "british_mineral_water_2l": {
+        "ean": "5059697384226",
+        "name": "British Natural Mineral Water Still 2L",
+        "parent_price": 0.85,
+        "pack_size": 1,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
+    },
+    "british_mineral_water_6x2l": {
+        "ean": "5063446480503",
+        "name": "British Natural Mineral Water Still 6X2L",
+        "parent_price": 2.50,
+        "pack_size": 6,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
+    },
 }
 
 
