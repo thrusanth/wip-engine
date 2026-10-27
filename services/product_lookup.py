@@ -81,6 +81,29 @@ def case_size_for_catalog_key(catalog_key: Optional[str]) -> Optional[int]:
     return max(1, int(item["pack_size"])) if item else None
 
 
+LEGACY_RETAIL_BY_EAN: dict[str, float] = {
+    "5051410987654": 3.00,
+    "5051420123456": 2.40,
+    "5051410112233": 6.00,
+    "5051410223344": 4.00,
+    "5051410998877": 11.00,
+}
+
+
+def retail_price_for_ean(ean: Optional[str]) -> Optional[float]:
+    """Full shelf price (GBP) of the whole case/multipack, or None when unmapped."""
+    code = _clean_ean(ean)
+    if not code:
+        return None
+    for item in CV_PRODUCT_CATALOG.values():
+        if str(item.get("ean")) == code:
+            return round(float(item["parent_price"]), 2)
+    master = catalog_by_ean().get(code)
+    if master:
+        return round(int(master["unit_price_pence"]) / 100.0, 2)
+    return LEGACY_RETAIL_BY_EAN.get(code)
+
+
 def resolve_case_size(
     ean: Optional[str] = None, sku: Optional[str] = None
 ) -> Optional[int]:

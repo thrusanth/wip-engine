@@ -2638,7 +2638,7 @@ def _render_global_kpi_header(*, poll_reconciliation_log: bool) -> dict:
     with col7:
         st.metric(
             label="Daily Waste Cost",
-            value=f"£{waste_cost:.2f}",
+            value=f"£{waste_cost:,.2f}",
             delta="↑ Known Margin Lost",
             delta_color="inverse",
         )

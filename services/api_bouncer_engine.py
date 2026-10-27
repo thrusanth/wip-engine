@@ -206,8 +206,10 @@ def _apply_health_and_safety_writeoff(
 ) -> tuple[str, str, str, TransactionEnginePayload, None]:
     # Total write-off always removes exactly one parent unit, independent of loose_units_visible.
     damaged_qty = 1
-    waste_value = round(damaged_qty * ledger_data.retail_price, 2)
-    record_scenario_a_waste(damaged_qty, waste_value)
+    # The KPI books the FULL case (case_size x per-unit price = whole-case retail), not loose units.
+    case_size = max(1, int(ledger_data.pack_quantity))
+    waste_value = round(case_size * (ledger_data.retail_price / case_size), 2)
+    record_scenario_a_waste(case_size, waste_value)
     stock_key = payload.parent_sku
     stock_adj = {stock_key: -damaged_qty}
     writeoff_rule = (
@@ -276,6 +278,9 @@ def _apply_torn_multipack_violation(
     else:
         final_unit_price = round(proportional_unit_price, 2)
         rule_applied = f"STANDARD_PROPORTIONAL [Math: {math_display}]"
+
+    # Daily waste books the full case: case_size x pro-rata unit price (not loose units).
+    record_scenario_a_waste(inner_pack_size, round(inner_pack_size * final_unit_price, 2))
 
     transaction_payload = TransactionEnginePayload(
         transaction_type="BOM_DECOMPOSITION_WITH_PRICING",

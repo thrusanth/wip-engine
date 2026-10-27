@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.product_lookup import resolve_case_size, retail_price_for_ean
 from services.shopfloor_catalog import catalog_by_ean
 
 
@@ -71,6 +72,42 @@ def parent_retail_writeoff_cost(
     return round(write_off, 2)
 
 
+DAMAGE_TRANSACTION_TYPES = frozenset(
+    {"BOM_DECOMPOSITION_WITH_PRICING", "HEALTH_AND_SAFETY_WRITEOFF"}
+)
+DAMAGE_STATUSES = frozenset({"DAMAGED", "FORMAT_VIOLATION_TORN_PACK"})
+
+
+def is_damaged_intercept(payload: dict[str, Any], tx_hook: dict[str, Any]) -> bool:
+    return (
+        str(tx_hook.get("transaction_type") or "") in DAMAGE_TRANSACTION_TYPES
+        or str(payload.get("status") or "") in DAMAGE_STATUSES
+    )
+
+
+def damaged_intercept_waste(
+    row: dict[str, Any], payload: dict[str, Any], tx_hook: dict[str, Any]
+) -> tuple[int, float]:
+    """(units, cost) written off for one damaged intercept: the FULL case, not loose units.
+
+    units = case_size; cost = case_size x unit price, where unit price is the engine's
+    pro-rata ``calculated_unit_price`` or, for write-offs, the case retail / case_size.
+    """
+    ean = str(row.get("ean") or payload.get("ean") or "").strip()
+    sku = str(row.get("sku") or payload.get("sku") or "").strip()
+    case_size = payload.get("case_size") or row.get("case_size") or resolve_case_size(ean, sku)
+    try:
+        case_size = max(1, int(case_size))
+    except (TypeError, ValueError):
+        case_size = 1
+
+    unit_price = tx_hook.get("calculated_unit_price")
+    if unit_price is None:
+        retail = retail_price_for_ean(ean) or retail_price_for_ean(sku)
+        unit_price = (retail / case_size) if retail else 0.0
+    return case_size, round(case_size * float(unit_price), 2)
+
+
 def aggregate_kpis_from_reconciliations(
     reconciliations: list[dict[str, Any]],
 ) -> dict[str, int | float]:
@@ -87,6 +124,13 @@ def aggregate_kpis_from_reconciliations(
         if not isinstance(adjustments, dict) or not adjustments:
             continue
 
+        if is_damaged_intercept(payload, tx_hook):
+            row_qty, row_cost = damaged_intercept_waste(row, payload, tx_hook)
+            daily_waste_qty += row_qty
+            daily_waste_cost += row_cost
+            continue
+
+        # Non-damage exceptions (e.g. abandoned flattop write-downs) keep the ledger-based rule.
         row_waste_qty = waste_units_from_adjustments(adjustments)
         if row_waste_qty <= 0:
             continue
