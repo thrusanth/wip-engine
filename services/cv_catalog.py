@@ -136,6 +136,22 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-04",
     },
+    "lucky_buddha_beer": {
+        "ean": "851626003001",
+        "name": "Lucky Budha Beer 0.33l",
+        "parent_price": 3.15,
+        "pack_size": 1,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "BEERS-WINES-01",
+    },
+    "walkers_quavers_6pk": {
+        "ean": "5000328014937",
+        "name": "Walkers Quavers Cheese Snacks 6X16G",
+        "parent_price": 2.70,
+        "pack_size": 6,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
+    },
 }
 
 
