@@ -28,6 +28,7 @@ class DamageEventPayload(BaseModel):
     item_name: str
     condition: str
     confidence_score: float = Field(ge=0.0, le=1.0)
+    loose_units_visible: int = Field(default=0, ge=0)
     trx_id: Optional[str] = None
     timestamp: Optional[str] = None
 

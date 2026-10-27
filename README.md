@@ -28,7 +28,7 @@ The **API Bouncer** layer (merged from the standalone `api_bouncer` project) sit
   - `POST /api/v1/bouncer/cv-detection` (primary CV webhook)
   - `POST /webhook/cv-detection` (legacy simulator compatibility)
   - `POST /api/v1/telemetry/fill` (edge fill telemetry destined for engine + offline audit)
-- **Reconciliation engine (`services/api_bouncer_engine.py`):** Validates CV confidence (≥ 0.85), compares detected shelf formats against the central ledger, performs BOM decomposition for torn multipacks, and applies UK alcohol pricing floors (England Duty+VAT vs Scotland/Wales MUP).
+- **Reconciliation engine (`services/api_bouncer_engine.py`):** Validates CV confidence (≥ 0.80 for INTACT stock, ≥ 0.70 for damage detections), compares detected shelf formats against the central ledger, performs BOM decomposition for torn multipacks, and applies UK alcohol pricing floors (England Duty+VAT vs Scotland/Wales MUP).
 - **WAL audit buffer (`services/bouncer_buffer.py`):** Stores reconciliation outcomes and active API rejections in `bouncer_audit.db` (configurable via `BOUNCER_BUFFER_PATH`).
 
 ### Rate Limiting & Security Rules

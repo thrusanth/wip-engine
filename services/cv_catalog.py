@@ -14,7 +14,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 2.35,
         "pack_size": 6,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-04-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-04",
     },
     "heinz_beans_4pk": {
         "ean": "5000157024886",
@@ -22,7 +22,15 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 4.00,
         "pack_size": 4,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-02-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-02",
+    },
+    "nestle_cheerios_500g": {
+        "ean": "8445291301948",
+        "name": "Nestle Cheerios, Wholegrain Cereal, Multigrain, 500g",
+        "parent_price": 4.00,
+        "pack_size": 1,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-02",
     },
     "coca_cola_8pk": {
         "ean": "5449000058386",
@@ -30,7 +38,15 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 6.00,
         "pack_size": 8,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-05-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-05",
+    },
+    "coca_cola_zero_8pk": {
+        "ean": "5449000031341",
+        "name": "Coca-Cola Zero Sugar 8x330ml Multipack",
+        "parent_price": 4.50,
+        "pack_size": 8,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
     },
     "schweppes_lemonade_2l": {
         "ean": "5000193900861",
@@ -38,7 +54,15 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 2.00,
         "pack_size": 1,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-05-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-05",
+    },
+    "diet_coke_caffeine_free_8pk": {
+        "ean": "5449000154774",
+        "name": "Diet Coke Caffeine Free 8x300ml",
+        "parent_price": 4.70,
+        "pack_size": 8,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-05",
     },
     "fosters_lager_4pk": {
         "ean": "5035766185239",
@@ -46,7 +70,15 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 4.50,
         "pack_size": 4,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-06-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-06",
+    },
+    "budweiser_4pk": {
+        "ean": "5021319189021",
+        "name": "Budweiser 4x440ml",
+        "parent_price": 5.00,
+        "pack_size": 4,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-06",
     },
     "galaxy_cookie_180g": {
         "ean": "5060402904776",
@@ -54,7 +86,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 2.50,
         "pack_size": 1,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-03-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-03",
     },
     "doritos_cool_original_sharing_bag": {
         "ean": "5000328028613",
@@ -62,7 +94,15 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 2.75,
         "pack_size": 1,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-04-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-04",
+    },
+    "mccoys_classic_variety_6pk": {
+        "ean": "5000237129999",
+        "name": "McCoy's Classic Variety Crisps 6x25g",
+        "parent_price": 2.65,
+        "pack_size": 6,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
     },
     "asahi_super_dry_620ml": {
         "ean": "8008440246066",
@@ -70,16 +110,9 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "parent_price": 3.55,
         "pack_size": 1,
         "child_sku_suffix": "SINGLE-WASTE",
-        "printer_target": "CAM-AISLE-06-ZPL-PRINTER",
+        "planogram_location": "CAM-AISLE-06",
     },
 }
-
-
-def _fixture_from_printer_target(printer_target: str) -> str:
-    text = str(printer_target)
-    if "-ZPL-PRINTER" in text:
-        return text.split("-ZPL-PRINTER")[0]
-    return "CAM-AISLE-04"
 
 
 def resolve_cv_catalog_item(identifier: str) -> tuple[str, dict[str, Any]] | None:
@@ -102,19 +135,28 @@ def resolve_cv_catalog_item(identifier: str) -> tuple[str, dict[str, Any]] | Non
 def expected_ledger_from_cv_item(item: dict[str, Any]) -> ExpectedLedger:
     ean = str(item["ean"])
     parent = parent_sku_for_ean(ean)
-    pack_size = max(1, int(item["pack_size"]))
-    printer_target = str(item.get("printer_target") or "")
-    fixture = _fixture_from_printer_target(printer_target)
-    is_alcohol = "lager" in str(item.get("name", "")).lower() or "fosters" in str(
-        item.get("name", "")
-    ).lower()
+    name = str(item.get("name", ""))
+    fixture = str(item.get("planogram_location", "CAM-AISLE-04"))
+
+    pack_size = int(item.get("pack_size", 1))
+
+    if pack_size > 1:
+        expected_format = "SHRINK_WRAPPED_MULTIPACK"
+    else:
+        expected_format = "SINGLE_ITEM"
+
+    name_lower = name.lower()
+    is_alcohol = any(
+        brand in name_lower
+        for brand in ["lager", "fosters", "budweiser", "asahi", "beer", "cider"]
+    )
 
     return ExpectedLedger(
         parent_sku=parent,
         ean=ean,
         expected_quantity=pack_size * 2,
         planogram_location=fixture,
-        expected_format="SHRINK_WRAPPED_MULTIPACK",
+        expected_format=expected_format,
         linked_child_sku=f"{parent}-SINGLE",
         retail_price=float(item["parent_price"]),
         pack_quantity=pack_size,

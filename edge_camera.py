@@ -10,34 +10,43 @@ import sys
 import cv2
 import requests
 
+from services.cv_catalog import CV_PRODUCT_CATALOG, resolve_cv_catalog_item
+
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 LUNA_MODEL = "gpt-6-luna"
 BOUNCER_DAMAGE_URL = "http://127.0.0.1:8000/api/cv/damage-event"
 EDGE_API_KEY = "edge-cam-prod-992-xtz"
-HARDCODED_ITEM_NAME = "Multipack Crisps 6pk"
+LUNA_UNKNOWN_CATALOG_KEY = "unknown"
 
-LUNA_CATALOG_KEYS = [
-    "walkers_crisps_6pk",
-    "heinz_beans_4pk",
-    "coca_cola_8pk",
-    "schweppes_lemonade_2l",
-    "fosters_lager_4pk",
-    "galaxy_cookie_180g",
-    "doritos_cool_original_sharing_bag",
-    "asahi_super_dry_620ml",
-    "unknown",
-]
 
-SYSTEM_PROMPT = (
-    "You are a retail inventory inspector analyzing product packaging on a shop floor. "
-    "Respond with strictly valid JSON containing exactly three keys: "
-    '"condition" (must be one of: INTACT, TORN_MULTIPACK, CRUSHED), '
-    '"confidence" (a float between 0.0 and 1.0 indicating classification certainty), and '
-    '"catalog_key" (must be one of: '
-    + ", ".join(LUNA_CATALOG_KEYS)
-    + "). "
-    "Do not include any other keys or prose."
-)
+def _luna_catalog_key_options() -> list[str]:
+    return list(CV_PRODUCT_CATALOG.keys()) + [LUNA_UNKNOWN_CATALOG_KEY]
+
+
+def _build_luna_system_prompt() -> str:
+    keys = _luna_catalog_key_options()
+    catalog_lines = "\n".join(
+        f'  - {key}: {item["name"]}'
+        for key, item in CV_PRODUCT_CATALOG.items()
+    )
+    return (
+        "You are a retail inventory inspector analyzing product packaging on a shop floor. "
+        "Respond with strictly valid JSON containing exactly four keys: "
+        '"condition" (must be one of: INTACT, TORN_MULTIPACK, CRUSHED), '
+        '"confidence" (a float between 0.0 and 1.0 indicating classification certainty), '
+        '"catalog_key" (must be one of: '
+        + ", ".join(keys)
+        + "), and "
+        '"loose_units_visible" (a non-negative integer). '
+        "If the item is a torn multipack, count or estimate the number of intact, "
+        "sellable inner units visible. If none or not applicable, return 0. "
+        "You must classify the damaged item by selecting the exact matching key or name "
+        "from this provided catalog list:\n"
+        f"{catalog_lines}\n"
+        f'Use catalog_key "{LUNA_UNKNOWN_CATALOG_KEY}" only when no catalog entry matches. '
+        "Prefer returning the catalog slug key when confident. "
+        "Do not include any other keys or prose."
+    )
 
 USER_PROMPT = (
     "Examine this packaging. Is the outer seal completely intact, physically torn, "
@@ -74,7 +83,7 @@ def capture_and_encode() -> str:
     return base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
-def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str]:
+def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str | int]:
     """Send the frame to OpenAI Luna and parse condition + confidence JSON."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or not api_key.strip():
@@ -84,7 +93,7 @@ def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str]:
         "model": LUNA_MODEL,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _build_luna_system_prompt()},
             {
                 "role": "user",
                 "content": [
@@ -133,23 +142,40 @@ def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str]:
     confidence = max(0.0, min(1.0, confidence))
 
     catalog_key = str(decision.get("catalog_key", "")).strip()
-    if catalog_key not in LUNA_CATALOG_KEYS:
-        raise ValueError(f"Invalid catalog_key from model: {catalog_key!r}")
+    valid_keys = set(_luna_catalog_key_options())
+    if catalog_key not in valid_keys:
+        resolved = resolve_cv_catalog_item(catalog_key)
+        if resolved:
+            catalog_key = resolved[0]
+        elif catalog_key not in valid_keys:
+            raise ValueError(f"Invalid catalog_key from model: {catalog_key!r}")
+
+    try:
+        loose_units_visible = int(decision.get("loose_units_visible", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid loose_units_visible from model: {decision!r}"
+        ) from exc
+    loose_units_visible = max(0, loose_units_visible)
 
     return {
         "condition": condition,
         "confidence": confidence,
         "catalog_key": catalog_key,
+        "loose_units_visible": loose_units_visible,
     }
 
 
-def trigger_bouncer_webhook(decision_data: dict[str, float | str]) -> dict:
+def trigger_bouncer_webhook(decision_data: dict[str, float | str | int]) -> dict:
     """POST damage classification to the local API Bouncer CV ingestion route."""
-    catalog_key = str(decision_data.get("catalog_key") or HARDCODED_ITEM_NAME)
+    catalog_key = str(
+        decision_data.get("catalog_key") or LUNA_UNKNOWN_CATALOG_KEY
+    )
     payload = {
         "item_name": catalog_key,
         "condition": str(decision_data["condition"]),
         "confidence_score": float(decision_data["confidence"]),
+        "loose_units_visible": int(decision_data.get("loose_units_visible", 0)),
     }
 
     response = requests.post(

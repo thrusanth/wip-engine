@@ -32,6 +32,7 @@ def ingest_damage_event(payload: DamageEventPayload) -> DamageEventResponse:
         item_name=item["name"],
         condition=payload.condition,
         confidence_score=payload.confidence_score,
+        loose_units_visible=payload.loose_units_visible,
         trx_id=payload.trx_id,
         timestamp=payload.timestamp,
     )

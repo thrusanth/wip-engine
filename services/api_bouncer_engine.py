@@ -20,7 +20,6 @@ from models.bouncer_schemas import (
 from services.bouncer_buffer import get_reconciliation_by_trace_id, record_reconciliation
 from services.waste_metrics import record_scenario_a_waste
 from services.cv_catalog import (
-    _fixture_from_printer_target,
     expected_ledger_from_cv_item,
     resolve_cv_catalog_item,
 )
@@ -32,6 +31,8 @@ from services.shopfloor_catalog import (
 )
 
 MUP_RATE_PER_UNIT = float(os.getenv("BOUNCER_MUP_RATE_PER_UNIT", "0.65"))
+CV_MIN_CONFIDENCE_INTACT = 0.80
+CV_MIN_CONFIDENCE_DAMAGE = 0.70
 
 _LEGACY_LEDGER: dict[str, ExpectedLedger] = {
     "SKU-WATER-6PK": ExpectedLedger(
@@ -143,22 +144,40 @@ def _ledger_for_ean(ean: str) -> Optional[ExpectedLedger]:
     return CENTRAL_LEDGER_DB.get(parent_sku_for_ean(ean))
 
 
-def _torn_routing_product_name(
-    payload: CVEdgeDetection,
-    ledger_data: ExpectedLedger,
-) -> str:
-    if payload.product_name and str(payload.product_name).strip():
-        return str(payload.product_name).strip()
-    catalog_row = catalog_by_ean().get(ledger_data.ean)
-    if catalog_row:
-        return str(catalog_row["product_name"])
-    return ledger_data.parent_sku
+def _ledger_is_shrink_wrapped_multipack(ledger_data: ExpectedLedger) -> bool:
+    """Ledger-driven multipack check (no product-name parsing)."""
+    return ledger_data.expected_format == "SHRINK_WRAPPED_MULTIPACK"
 
 
-def _product_is_explicit_multipack(product_name: str) -> bool:
-    """Multipack torn-pack routing (markdown label / BOM split), not plain damage write-off."""
-    lowered = product_name.lower()
-    return "multipack" in lowered or "6pk" in lowered
+def _is_intact_detection(payload: CVEdgeDetection, ledger_data: ExpectedLedger) -> bool:
+    """Healthy stock: presented exactly as the ledger expects, no exception, no loose units."""
+    return (
+        not payload.exception_type
+        and int(payload.loose_units_visible) == 0
+        and payload.detected_format == ledger_data.expected_format
+    )
+
+
+def _min_confidence_for_detection(
+    payload: CVEdgeDetection, ledger_data: ExpectedLedger
+) -> float:
+    """Strict floor for INTACT stock; relaxed floor for any damage/exception signal."""
+    if _is_intact_detection(payload, ledger_data):
+        return CV_MIN_CONFIDENCE_INTACT
+    return CV_MIN_CONFIDENCE_DAMAGE
+
+
+def _is_torn_multipack_detection(
+    payload: CVEdgeDetection, ledger_data: ExpectedLedger
+) -> bool:
+    """Vision indicates a broken multipack on a SHRINK_WRAPPED_MULTIPACK ledger line."""
+    if not _ledger_is_shrink_wrapped_multipack(ledger_data):
+        return False
+    return (
+        payload.exception_type == "TORN_MULTIPACK"
+        or payload.detected_format == "TORN_MULTIPACK"
+        or int(payload.loose_units_visible) > 0
+    )
 
 
 def _apply_health_and_safety_writeoff(
@@ -168,7 +187,8 @@ def _apply_health_and_safety_writeoff(
     status_code: str,
     format_alert: str,
 ) -> tuple[str, str, str, TransactionEnginePayload, None]:
-    damaged_qty = int(payload.loose_units_visible)
+    # Total write-off always removes exactly one parent unit, independent of loose_units_visible.
+    damaged_qty = 1
     waste_value = round(damaged_qty * ledger_data.retail_price, 2)
     record_scenario_a_waste(damaged_qty, waste_value)
     stock_key = payload.parent_sku
@@ -198,10 +218,10 @@ def _apply_torn_multipack_violation(
     ledger_data: ExpectedLedger,
     audit_trace_id: str,
 ) -> tuple[str, str, str, Optional[TransactionEnginePayload], Optional[LabelPrintPayload]]:
-    product_name = _torn_routing_product_name(payload, ledger_data)
-    damaged_qty = int(payload.loose_units_visible)
+    damaged_qty = 1
 
-    if not _product_is_explicit_multipack(product_name):
+    # Only non-multipack ledger lines fall through to the strict H&S write-off.
+    if not _ledger_is_shrink_wrapped_multipack(ledger_data):
         return _apply_health_and_safety_writeoff(
             payload,
             ledger_data,
@@ -210,13 +230,15 @@ def _apply_torn_multipack_violation(
         )
 
     status_code = "FORMAT_VIOLATION_TORN_PACK"
+    inner_pack_size = max(1, int(ledger_data.pack_quantity))
     format_alert = (
-        f"Torn Multipack Detected! {payload.loose_units_visible} loose units exposed."
+        f"Torn Multipack Detected! Case of {inner_pack_size} broken — "
+        "pro-rata single-unit markdown applies."
     )
     shop_floor_action = "DISPATCH_COLLEAGUE: Remove loose units & attach markdown label."
 
+    # Pro-rata math is always retail_price ÷ case size (pack_quantity), never loose_units_visible.
     multipack_retail = ledger_data.retail_price
-    inner_pack_size = ledger_data.pack_quantity
     proportional_unit_price = round(multipack_retail / inner_pack_size, 2)
     math_display = (
         f"£{multipack_retail:.2f} ÷ {inner_pack_size} units = £{proportional_unit_price:.2f}"
@@ -300,8 +322,8 @@ def _damage_event_to_cv_detection(
         ean = str(cv_item["ean"])
         parent_sku = parent_sku_for_ean(ean)
         bom_units = max(1, int(cv_item["pack_size"])) * 2
-        printer_target = str(cv_item["printer_target"])
-        fixture_id = _fixture_from_printer_target(printer_target)
+        fixture_id = str(cv_item.get("planogram_location", "CAM-AISLE-04"))
+        printer_target = f"{fixture_id}-ZPL-PRINTER"
         product_name = cv_item["name"]
     else:
         catalog_row = catalog_by_product_name().get(stock_name.strip())
@@ -319,26 +341,33 @@ def _damage_event_to_cv_detection(
     condition = payload.condition.strip().upper()
 
     exception_type: Optional[str] = None
+    # Provisional value; INTACT is aligned to the ledger's expected_format below.
     detected_format = "SHRINK_WRAPPED_MULTIPACK"
+    model_loose = max(0, int(payload.loose_units_visible or 0))
     loose_units_visible = 0
+
+    # Physical evidence beats Luna's label: loose units mean the pack is compromised,
+    # even if the raw condition says INTACT (e.g. a taped-up multipack).
+    if condition == "INTACT" and model_loose > 0:
+        condition = "TORN_MULTIPACK"
 
     if condition == "TORN_MULTIPACK":
         exception_type = "TORN_MULTIPACK"
         detected_format = "TORN_MULTIPACK"
-        loose_units_visible = 1
+        loose_units_visible = model_loose
     elif condition == "CRUSHED":
         exception_type = "TORN_MULTIPACK"
         detected_format = "TORN_MULTIPACK"
-        loose_units_visible = 1
+        loose_units_visible = model_loose
     elif condition == "INTACT":
-        detected_format = "SHRINK_WRAPPED_MULTIPACK"
+        pass
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unsupported condition: {payload.condition}",
         )
 
-    return CVEdgeDetection(
+    detection = CVEdgeDetection(
         store_region="ENG",
         parent_sku=parent_sku,
         detected_quantity=bom_units,
@@ -354,6 +383,16 @@ def _damage_event_to_cv_detection(
         product_name=product_name,
         printer_target=printer_target,
     )
+
+    if condition == "INTACT":
+        # A healthy item is presented exactly as the ledger expects (single or multipack),
+        # so it never trips a false FORMAT_VIOLATION_GENERAL.
+        ledger_data = _resolve_ledger(detection)
+        detection = detection.model_copy(
+            update={"detected_format": ledger_data.expected_format}
+        )
+
+    return detection
 
 
 def process_damage_event(payload: DamageEventPayload) -> ShelfReconciliation:
@@ -380,13 +419,14 @@ def process_cv_detection(payload: CVEdgeDetection) -> ShelfReconciliation:
         if cached:
             return _shelf_reconciliation_from_log(cached)
 
-    if payload.confidence_score < 0.85:
+    ledger_data = _resolve_ledger(payload)
+
+    min_confidence = _min_confidence_for_detection(payload, ledger_data)
+    if payload.confidence_score < min_confidence:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="CV confidence too low.",
         )
-
-    ledger_data = _resolve_ledger(payload)
 
     format_alert = "PASS - Clean fill verified"
     status_code = "SYNCED"
@@ -438,11 +478,7 @@ def process_cv_detection(payload: CVEdgeDetection) -> ShelfReconciliation:
             ledger_adjustments=adjustments,
         )
 
-    elif exception_type == "TORN_MULTIPACK" or (
-        payload.detected_format != ledger_data.expected_format
-        and payload.detected_format == "TORN_MULTIPACK"
-        and payload.loose_units_visible > 0
-    ):
+    elif _is_torn_multipack_detection(payload, ledger_data) or exception_type == "TORN_MULTIPACK":
         (
             status_code,
             format_alert,
