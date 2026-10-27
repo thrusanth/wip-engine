@@ -610,7 +610,7 @@ def refresh_bouncer_ingress_snapshot() -> None:
 
 @st.fragment
 def render_bouncer_ingress_section() -> None:
-    """Network health + Active API Rejections + Live Reconciliation Log.
+    """Live Reconciliation Log first, then network health/limits and Active API Rejections.
 
     A fragment fed from a session-state snapshot that ONLY the refresh button (or purge)
     rewrites, so edge-camera activity and auto-refresh never re-query or re-render it.
@@ -640,6 +640,20 @@ def render_bouncer_ingress_section() -> None:
     rejections = snapshot["rejections"]
     reconciliations = snapshot["reconciliations"]
 
+    st.markdown("#### Live Reconciliation Log")
+    if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
+        if handle_purge_reconciliation_log():
+            st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
+            st.rerun()  # app scope: purge also resets dashboard-wide state
+    if reconciliations:
+        render_bouncer_reconciliation_dashboard(reconciliations)
+    else:
+        st.info(
+            "No CV reconciliations yet. Run `python3 tests/simulate_cv_traffic.py` "
+            "against the integrated middleware."
+        )
+
+    st.divider()
     if health:
         h1, h2, h3, h4 = st.columns(4)
         with h1:
@@ -676,20 +690,6 @@ def render_bouncer_ingress_section() -> None:
         )
     else:
         st.info("No rejected ingress payloads recorded in the bouncer WAL buffer.")
-
-    st.divider()
-    st.markdown("#### Live Reconciliation Log")
-    if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
-        if handle_purge_reconciliation_log():
-            st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
-            st.rerun()  # app scope: purge also resets dashboard-wide state
-    if reconciliations:
-        render_bouncer_reconciliation_dashboard(reconciliations)
-    else:
-        st.info(
-            "No CV reconciliations yet. Run `python3 tests/simulate_cv_traffic.py` "
-            "against the integrated middleware."
-        )
 
 
 def _bouncer_row_payload(row: dict) -> dict:
@@ -2603,52 +2603,52 @@ def _render_global_kpi_header(*, poll_reconciliation_log: bool) -> dict:
     col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     with col1:
         st.metric(
+            label="Daily Waste QTY",
+            value=waste_qty,
+            delta="↑ CV Reconciliation Write-offs",
+            delta_color="inverse",
+        )
+    with col2:
+        st.metric(
+            label="Daily Waste Cost",
+            value=f"£{waste_cost:,.2f}",
+            delta="↑ Known Margin Lost",
+            delta_color="inverse",
+        )
+    with col3:
+        st.metric(
             label="Pending Delivery Cages",
             value=live_metrics["pending_delivery_cages"],
             delta="Awaiting Breakdown",
             delta_color="off",
         )
-    with col2:
+    with col4:
         st.metric(
             label="Active Flattops",
             value=_active_flattop_count(),
             delta="Live Manifests",
             delta_color="off",
         )
-    with col3:
+    with col5:
         st.metric(
             label="Total Missing Units",
             value=display_phantom_drift,
             delta="Unconfirmed + Confirmed",
             delta_color="inverse",
         )
-    with col4:
+    with col6:
         st.metric(
             label="Total At-Risk Cost",
             value=f"£{total_at_risk_cost:.2f}",
             delta="Retail Exposure",
             delta_color="inverse",
         )
-    with col5:
+    with col7:
         st.metric(
             label="Pending Edge Tasks",
             value=display_pending_edge_tasks,
             delta="All Tasks Cleared",
             delta_color="normal",
-        )
-    with col6:
-        st.metric(
-            label="Daily Waste QTY",
-            value=waste_qty,
-            delta="↑ CV Reconciliation Write-offs",
-            delta_color="inverse",
-        )
-    with col7:
-        st.metric(
-            label="Daily Waste Cost",
-            value=f"£{waste_cost:,.2f}",
-            delta="↑ Known Margin Lost",
-            delta_color="inverse",
         )
 
     return live_metrics
@@ -3483,11 +3483,20 @@ def _count_pending_offline_scans(db_path: str | Path) -> int:
 
 
 if _DASHBOARD_ACTIVE_TAB_KEY not in st.session_state:
-    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
+    st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = DASHBOARD_TABS[0]
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(DASHBOARD_TABS)
+# Unpacking order must match DASHBOARD_TABS in mock_data.py.
+(
+    tab_api_bouncer,
+    tab_pda_view,
+    tab_system_overview,
+    tab_telemetry,
+    tab_offline_fill,
+    tab_edge_ai,
+    tab_shopfloor,
+) = st.tabs(DASHBOARD_TABS)
 
-with tab1:
+with tab_system_overview:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SYSTEM_OVERVIEW
     _all_flattop_cards = _build_flattop_cards_from_queue(live_containers)
     _injected_cards, _baseline_cards = _partition_flattop_cards_for_overview(
@@ -3514,7 +3523,7 @@ with tab1:
         _baseline_cards, card_index_offset=len(_injected_cards)
     )
 
-with tab2:
+with tab_telemetry:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_TELEMETRY
     st.subheader("Live Execution Telemetry")
     _telemetry_columns = ["SKU", "Name", "EAN", "Location", "Drift"]
@@ -3530,7 +3539,7 @@ with tab2:
     else:
         st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
 
-with tab3:
+with tab_offline_fill:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_OFFLINE_FILL
     power_cut_exceptions = [
         exc for exc in active_exceptions if _is_total_power_cut_exception(exc)
@@ -3630,7 +3639,7 @@ with tab3:
                     hide_index=True,
                 )
 
-with tab4:
+with tab_edge_ai:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_EDGE_AI
     st.subheader("Localized Edge Autonomy (Computer Vision)")
     edge_col1, edge_col2, edge_col3 = st.columns(3)
@@ -3722,10 +3731,8 @@ with tab4:
             "(keeps other tabs responsive)."
         )
 
-with tab5:
+with tab_api_bouncer:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_API_BOUNCER
-    st.subheader("API Bouncer — Network Health & Ingress Controls")
-
     # Two independent regions: the edge camera (auto-detect + live feed) is always on and never waits
     # for the global refresh; the ingress section only updates when its own button is clicked.
     render_edge_camera_panel()
@@ -3733,7 +3740,7 @@ with tab5:
     st.divider()
     render_bouncer_ingress_section()
 
-with tab6:
+with tab_shopfloor:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SHOPFLOOR_SCENARIOS
     st.subheader("Shopfloor Scenarios — Manual Edge Injection")
     st.caption(
@@ -3841,6 +3848,6 @@ with tab6:
         ):
             handle_scenario_b_injection(flattop_id, list(selected_names))
 
-with tab7:
+with tab_pda_view:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_PDA_VIEW
     render_pda_view_tab()
