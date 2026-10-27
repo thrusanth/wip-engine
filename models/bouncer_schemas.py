@@ -31,6 +31,18 @@ class DamageEventPayload(BaseModel):
     loose_units_visible: int = Field(default=0, ge=0)
     trx_id: Optional[str] = None
     timestamp: Optional[str] = None
+    # Live-feed telemetry (not used by the routing engine).
+    source: Optional[str] = Field(default=None, max_length=32)
+    frame_thumbnail_b64: Optional[str] = Field(default=None, max_length=50_000)
+
+
+class FrameAnalyzePayload(BaseModel):
+    """Browser/dashboard camera frame to classify with Luna and route through the bouncer."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    image_b64: str = Field(min_length=100, max_length=60_000)
+    source: Optional[str] = Field(default="dashboard_camera", max_length=32)
 
 
 class CVEdgeDetection(BaseModel):
@@ -73,6 +85,8 @@ class ShelfReconciliation(BaseModel):
     trace_id: str
     sku: str
     ean: str
+    product_name: Optional[str] = None
+    case_size: Optional[int] = None
     status: str
     format_alert: str
     shop_floor_action: str

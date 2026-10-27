@@ -25,9 +25,14 @@ CV_PATHS = frozenset(
     }
 )
 CV_DAMAGE_PATHS = frozenset({"/api/cv/damage-event"})
+# Frame classification costs an OpenAI call per request, so it gets a tighter limit.
+CV_ANALYZE_PATHS = frozenset({"/api/cv/analyze-frame"})
+ANALYZE_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("BOUNCER_ANALYZE_RATE_LIMIT_PER_MINUTE", "10")
+)
 FILL_PATHS = frozenset({"/api/v1/telemetry/fill"})
 
-PROTECTED_PATHS = CV_PATHS | CV_DAMAGE_PATHS | FILL_PATHS
+PROTECTED_PATHS = CV_PATHS | CV_DAMAGE_PATHS | CV_ANALYZE_PATHS | FILL_PATHS
 
 
 class _RateLimiter:
@@ -108,6 +113,13 @@ def _validate_damage_event_integrity(body: dict) -> str | None:
     return None
 
 
+def _validate_analyze_integrity(body: dict) -> str | None:
+    image = body.get("image_b64")
+    if not isinstance(image, str) or not image.strip():
+        return "image_b64 must be a non-empty base64 string"
+    return None
+
+
 def _validate_cv_integrity(body: dict) -> str | None:
     required = (
         "parent_sku",
@@ -184,8 +196,12 @@ class ApiBouncerMiddleware(BaseHTTPMiddleware):
             )
 
         client = _client_key(request)
-        if path in CV_PATHS or path in CV_DAMAGE_PATHS:
-            limit = CV_RATE_LIMIT_PER_MINUTE
+        if path in CV_PATHS or path in CV_DAMAGE_PATHS or path in CV_ANALYZE_PATHS:
+            limit = (
+                ANALYZE_RATE_LIMIT_PER_MINUTE
+                if path in CV_ANALYZE_PATHS
+                else CV_RATE_LIMIT_PER_MINUTE
+            )
             api_key = request.headers.get("x-api-key")
             if not is_valid_edge_token(api_key):
                 return _reject(
@@ -195,7 +211,9 @@ class ApiBouncerMiddleware(BaseHTTPMiddleware):
                     detail="Unauthorized: Invalid Edge Camera Token",
                     payload_preview=preview,
                 )
-            if path in CV_DAMAGE_PATHS:
+            if path in CV_ANALYZE_PATHS:
+                integrity_error = _validate_analyze_integrity(body)
+            elif path in CV_DAMAGE_PATHS:
                 integrity_error = _validate_damage_event_integrity(body)
             else:
                 integrity_error = _validate_cv_integrity(body)

@@ -18,6 +18,7 @@ from models.bouncer_schemas import (
     TransactionEnginePayload,
 )
 from services.bouncer_buffer import get_reconciliation_by_trace_id, record_reconciliation
+from services.product_lookup import resolve_case_size, resolve_product_name
 from services.waste_metrics import record_scenario_a_waste
 from services.cv_catalog import (
     expected_ledger_from_cv_item,
@@ -167,6 +168,22 @@ def _min_confidence_for_detection(
     return CV_MIN_CONFIDENCE_DAMAGE
 
 
+def effective_damage_condition(condition: str, loose_units_visible: int) -> str:
+    """Physical evidence beats Luna's label: loose units mean the pack is compromised,
+    even if the raw condition says INTACT (e.g. a taped-up multipack)."""
+    normalized = condition.strip().upper()
+    if normalized == "INTACT" and int(loose_units_visible or 0) > 0:
+        return "TORN_MULTIPACK"
+    return normalized
+
+
+def confidence_floor_for_condition(effective_condition: str) -> float:
+    """Strict floor for INTACT; relaxed floor for any damage condition."""
+    if effective_condition == "INTACT":
+        return CV_MIN_CONFIDENCE_INTACT
+    return CV_MIN_CONFIDENCE_DAMAGE
+
+
 def _is_torn_multipack_detection(
     payload: CVEdgeDetection, ledger_data: ExpectedLedger
 ) -> bool:
@@ -287,11 +304,18 @@ def _apply_torn_multipack_violation(
 def _shelf_reconciliation_from_log(row: dict) -> ShelfReconciliation:
     nested = row.get("payload")
     if isinstance(nested, dict) and nested.get("trace_id"):
-        return ShelfReconciliation(**nested)
+        cached = ShelfReconciliation(**nested)
+        if not cached.product_name:  # rows logged before product names were attached
+            cached.product_name = resolve_product_name(cached.ean, cached.sku)
+        if cached.case_size is None:
+            cached.case_size = resolve_case_size(cached.ean, cached.sku)
+        return cached
     return ShelfReconciliation(
         trace_id=str(row["trace_id"]),
         sku=str(row["sku"]),
         ean=str(row.get("ean") or ""),
+        product_name=resolve_product_name(row.get("ean"), row.get("sku")),
+        case_size=resolve_case_size(row.get("ean"), row.get("sku")),
         status=str(row["status"]),
         format_alert=str(row.get("format_alert") or ""),
         shop_floor_action=str(row.get("shop_floor_action") or ""),
@@ -346,10 +370,7 @@ def _damage_event_to_cv_detection(
     model_loose = max(0, int(payload.loose_units_visible or 0))
     loose_units_visible = 0
 
-    # Physical evidence beats Luna's label: loose units mean the pack is compromised,
-    # even if the raw condition says INTACT (e.g. a taped-up multipack).
-    if condition == "INTACT" and model_loose > 0:
-        condition = "TORN_MULTIPACK"
+    condition = effective_damage_condition(condition, model_loose)
 
     if condition == "TORN_MULTIPACK":
         exception_type = "TORN_MULTIPACK"
@@ -498,6 +519,9 @@ def process_cv_detection(payload: CVEdgeDetection) -> ShelfReconciliation:
         trace_id=audit_trace_id,
         sku=payload.parent_sku,
         ean=ledger_data.ean,
+        product_name=payload.product_name
+        or resolve_product_name(ledger_data.ean, payload.parent_sku),
+        case_size=max(1, int(ledger_data.pack_quantity)),
         status=status_code,
         format_alert=format_alert,
         shop_floor_action=shop_floor_action,

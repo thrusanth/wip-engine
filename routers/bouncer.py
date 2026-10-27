@@ -9,7 +9,18 @@ from models.bouncer_schemas import (
     CVEdgeDetection,
     ShelfReconciliation,
 )
-from services.api_bouncer_engine import process_cv_detection
+from services.api_bouncer_engine import (
+    CV_MIN_CONFIDENCE_DAMAGE,
+    CV_MIN_CONFIDENCE_INTACT,
+    process_cv_detection,
+)
+from services.product_lookup import resolve_case_size, resolve_product_name
+from services.edge_feed import (
+    latest_frame,
+    list_feed_events,
+    purge_feed,
+    summarize_feed,
+)
 from services.bouncer_buffer import (
     BOUNCER_DB_PATH,
     count_rejections_since,
@@ -52,7 +63,45 @@ def active_rejections(limit: int = 50):
 
 @router.get("/reconciliations")
 def reconciliation_logs(limit: int = 50):
-    return list_reconciliations(limit=limit)
+    rows = list_reconciliations(limit=limit)
+    for row in rows:
+        # Older rows were logged before product names were attached; resolve them on read.
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        name = (
+            payload.get("product_name")
+            or resolve_product_name(row.get("ean"), row.get("sku"))
+        )
+        case_size = payload.get("case_size") or resolve_case_size(
+            row.get("ean"), row.get("sku")
+        )
+        row["product_name"] = name
+        row["case_size"] = case_size
+        if isinstance(row.get("payload"), dict):
+            if name and not row["payload"].get("product_name"):
+                row["payload"]["product_name"] = name
+            if case_size and not row["payload"].get("case_size"):
+                row["payload"]["case_size"] = case_size
+    return rows
+
+
+@router.get("/edge-feed")
+def edge_feed(limit: int = 25):
+    """Live edge_camera.py telemetry: confidence, thresholds, case size and routing per capture."""
+    events = list_feed_events(limit=limit)
+    return {
+        "summary": summarize_feed(events),
+        "events": events,
+        "confidence_floors": {
+            "intact": CV_MIN_CONFIDENCE_INTACT,
+            "damage": CV_MIN_CONFIDENCE_DAMAGE,
+        },
+        "latest_frame": latest_frame(),
+    }
+
+
+@router.delete("/edge-feed")
+def purge_edge_feed():
+    return {"status": "ok", "deleted": purge_feed()}
 
 
 @router.delete("/purge")

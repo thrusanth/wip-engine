@@ -64,6 +64,9 @@ from mock_data import (
     SESSION_DAILY_SHRINK_FROM_QUEUE_KEY,
 )
 from services.bouncer_reconciliation_kpis import aggregate_kpis_from_reconciliations
+from services.edge_feed import make_thumbnail_b64
+from services.product_lookup import resolve_product_name
+from services.edge_tokens import edge_camera_headers
 from state_handlers import (
     extract_offline_recovery_payload,
     handle_purge_reconciliation_log,
@@ -275,6 +278,406 @@ def fetch_bouncer_reconciliations():
     return []
 
 
+def fetch_edge_feed(limit: int = 25) -> dict | None:
+    """Live edge_camera.py telemetry (confidence, case size, routing) from the bouncer."""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/bouncer/edge-feed", params={"limit": limit}, timeout=4
+        )
+        if response.status_code == 200:
+            return response.json()
+    except requests.exceptions.RequestException:
+        pass
+    return None
+
+
+def purge_edge_feed() -> bool:
+    try:
+        response = requests.delete(f"{API_BASE_URL}/bouncer/edge-feed", timeout=4)
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
+
+
+def analyze_camera_frame(image_bytes: bytes, source: str = "dashboard_camera") -> dict:
+    """Send a dashboard camera frame through the same Luna → API Bouncer pipeline as edge_camera.py."""
+    analyze_url = (
+        API_BASE_URL.rsplit("/api/v1", 1)[0].rstrip("/") + "/api/cv/analyze-frame"
+    )
+    try:
+        thumbnail = make_thumbnail_b64(image_bytes)
+        response = requests.post(
+            analyze_url,
+            json={"image_b64": thumbnail, "source": source},
+            headers=edge_camera_headers(),
+            timeout=130,
+        )
+    except requests.exceptions.RequestException as exc:
+        return {"error": f"Could not reach the API Bouncer: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - unreadable image etc.
+        return {"error": f"Could not prepare the camera frame: {exc}"}
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"detail": response.text[:300]}
+    if response.status_code != 200:
+        return {"error": str(body.get("detail", body)), "http_status": response.status_code}
+    return body
+
+
+_EDGE_ROUTING_STYLES = {
+    "INTACT_SYNC": ("synced", "✅", "INTACT · SYNCED"),
+    "DAMAGED_REPRICE": ("violation", "🚨", "DAMAGED · PRO-RATA REPRICE"),
+    "DAMAGED_WRITEOFF": ("violation", "🚨", "DAMAGED · H&S WRITE-OFF"),
+    "REJECTED": ("rejected", "⛔", "REJECTED"),
+}
+
+
+def _edge_feed_local_time(iso_value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(iso_value).replace("Z", "+00:00"))
+        return parsed.astimezone(ZoneInfo("Europe/London")).strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        return str(iso_value)[11:19]
+
+
+def build_edge_feed_latest_card_html(event: dict, floors: dict) -> str:
+    """Dark telemetry card for the newest capture; same palette as the reconciliation log."""
+    routing = str(event.get("routing") or "")
+    style, icon, label = _EDGE_ROUTING_STYLES.get(routing, ("synced", "ℹ️", routing or "UNKNOWN"))
+    confidence = float(event.get("confidence_score") or 0.0)
+    threshold = float(event.get("confidence_threshold") or 0.0)
+    raw_condition = html.escape(str(event.get("raw_condition") or ""))
+    effective = html.escape(str(event.get("effective_condition") or ""))
+    condition_text = f"Luna: <strong>{raw_condition}</strong>"
+    if raw_condition != effective:
+        condition_text += (
+            f" → treated as <strong>{effective}</strong> (loose units visible)"
+        )
+    floor_name = "INTACT" if event.get("effective_condition") == "INTACT" else "DAMAGE"
+    detail = event.get("detail")
+    detail_html = (
+        f'<div class="edge-feed-note">{html.escape(str(detail))}</div>' if detail else ""
+    )
+    price = event.get("calculated_unit_price")
+    price_html = f"£{float(price):.2f}" if price is not None else "—"
+    case_size = event.get("case_size")
+    case_size_html = f"{int(case_size)}" if case_size else "—"
+    label_html = "🖨️ Label queued" if event.get("label_printed") else "No label"
+    return (
+        '<div class="edge-feed-card">'
+        '<div class="edge-feed-card-head">'
+        f'<span class="edge-feed-item">{html.escape(str(event.get("item_name") or "Unrecognised item"))}</span>'
+        f'<span class="edge-feed-badge {style}">{icon} {html.escape(label)}</span>'
+        "</div>"
+        f'<div class="edge-feed-meta">{html.escape(str(event.get("trace_id") or ""))} · '
+        f'{_edge_feed_local_time(event.get("created_at", ""))} · '
+        f'{html.escape(str(event.get("source") or "edge_camera"))}</div>'
+        '<div class="edge-feed-bar">'
+        f'<div class="edge-feed-bar-fill {style}" style="width:{min(100.0, confidence * 100):.0f}%"></div>'
+        f'<div class="edge-feed-bar-floor" style="left:{min(100.0, threshold * 100):.0f}%"></div>'
+        "</div>"
+        f'<div class="edge-feed-conf">Confidence <strong>{confidence * 100:.0f}%</strong>'
+        f" · {floor_name} floor {threshold * 100:.0f}%</div>"
+        f'<div class="edge-feed-meta">{condition_text}</div>'
+        '<div class="edge-feed-grid">'
+        f'<div><span>Case size</span><strong>{case_size_html}</strong></div>'
+        f'<div><span>Unit price</span><strong>{price_html}</strong></div>'
+        f'<div><span>Expected format</span><strong>{html.escape(str(event.get("expected_format") or "—"))}</strong></div>'
+        "</div>"
+        f'<div class="edge-feed-meta">{html.escape(str(event.get("status") or ""))} · {label_html}</div>'
+        f"{detail_html}"
+        "</div>"
+    )
+
+
+_EDGE_FEED_CSS = """
+<style>
+.edge-feed-card { background:#0e1117; border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:16px 18px; color:#e0e0e0; font-family:system-ui,-apple-system,sans-serif; }
+.edge-feed-card-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:4px; }
+.edge-feed-item { font-weight:700; color:#fafafa; font-size:1.05rem; }
+.edge-feed-badge { padding:6px 12px; border-radius:6px; font-weight:600; font-size:0.75rem; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+.edge-feed-badge.synced { background:rgba(21,128,61,0.28); color:#bbf7d0; border:1px solid #4ade80; }
+.edge-feed-badge.violation { background:rgba(185,28,28,0.22); color:#fecaca; border:1px solid #f87171; }
+.edge-feed-badge.rejected { background:rgba(217,119,6,0.22); color:#fde68a; border:1px solid #fbbf24; }
+.edge-feed-meta { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:0.72rem; color:#a3a8b8; margin:6px 0; }
+.edge-feed-meta strong { color:#fafafa; }
+.edge-feed-bar { position:relative; height:10px; background:#1e293b; border-radius:999px; margin:12px 0 6px; overflow:visible; }
+.edge-feed-bar-fill { height:100%; border-radius:999px; }
+.edge-feed-bar-fill.synced { background:#4ade80; }
+.edge-feed-bar-fill.violation { background:#f87171; }
+.edge-feed-bar-fill.rejected { background:#fbbf24; }
+.edge-feed-bar-floor { position:absolute; top:-4px; width:2px; height:18px; background:#fafafa; }
+.edge-feed-conf { font-size:0.9rem; color:#e0e0e0; }
+.edge-feed-conf strong { color:#fafafa; }
+.edge-feed-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:12px 0 4px; }
+.edge-feed-grid div { background:#1e293b; border-left:3px solid #64748b; padding:8px 10px; border-radius:0 6px 6px 0; }
+.edge-feed-grid span { display:block; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.05em; color:#9ca3af; }
+.edge-feed-grid strong { color:#f1f5f9; font-size:0.85rem; word-break:break-word; }
+.edge-feed-note { background:#3d2a14; border-left:3px solid #d97706; padding:8px 12px; margin-top:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:0.75rem; color:#fde68a; border-radius:0 6px 6px 0; }
+</style>
+"""
+
+
+def render_edge_feed_body(limit: int = 25) -> None:
+    """Telemetry body (live frame, KPIs, latest capture, history). Safe to auto-refresh."""
+    feed = fetch_edge_feed(limit)
+    if feed is None:
+        st.warning("Unable to reach the edge feed endpoint. Is the FastAPI backend running?")
+        return
+
+    summary = feed.get("summary", {})
+    floors = feed.get("confidence_floors", {})
+    events = feed.get("events", [])
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    avg = summary.get("avg_confidence")
+    k1.metric("Captures", summary.get("captures", 0))
+    k2.metric("Avg Confidence", f"{avg * 100:.0f}%" if avg is not None else "—")
+    k3.metric("Intact", summary.get("intact", 0))
+    k4.metric("Damaged", summary.get("damaged", 0))
+    k5.metric("Rejected", summary.get("rejected", 0))
+    st.caption(
+        f"Confidence floors — INTACT ≥ {floors.get('intact', 0.8) * 100:.0f}%, "
+        f"damage ≥ {floors.get('damage', 0.7) * 100:.0f}%. "
+        "Loose units force the damage floor regardless of Luna's raw condition."
+    )
+
+    frame_col, card_col = st.columns([1, 1.4])
+    with frame_col:
+        frame = feed.get("latest_frame")
+        if frame and frame.get("frame_b64"):
+            st.image(
+                base64.b64decode(frame["frame_b64"]),
+                caption=f"Latest frame · {_edge_feed_local_time(frame.get('created_at', ''))} "
+                f"· {frame.get('trace_id', '')}",
+                use_container_width=True,
+            )
+        else:
+            st.info(
+                "No frame received yet. Run `python3 edge_camera.py` (set `BOUNCER_DAMAGE_URL` "
+                "to this backend) or take a photo and press **Detect**."
+            )
+    with card_col:
+        if events:
+            st.markdown(
+                _EDGE_FEED_CSS + build_edge_feed_latest_card_html(events[0], floors),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("Waiting for the first edge capture…")
+
+    if events:
+        table = pd.DataFrame(
+            [
+                {
+                    "Time": _edge_feed_local_time(e["created_at"]),
+                    "Item": e.get("item_name") or "—",
+                    "Luna": e.get("raw_condition"),
+                    "Treated As": e.get("effective_condition"),
+                    "Confidence": float(e["confidence_score"]),
+                    "Floor": float(e["confidence_threshold"]),
+                    "Case Size": e.get("case_size"),
+                    "Routing": e.get("routing"),
+                    "Status": e.get("status"),
+                    "Source": e.get("source"),
+                }
+                for e in events
+            ]
+        )
+        table["Case Size"] = table["Case Size"].astype("Int64")  # unknown items show blank, not "None"
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence", min_value=0.0, max_value=1.0, format="%.2f"
+                ),
+                "Floor": st.column_config.NumberColumn("Floor", format="%.2f"),
+            },
+        )
+
+
+def _resolve_detect_frame(photo) -> tuple[bytes | None, str]:
+    """Frame for the Detect button: browser camera photo first, else the latest simulated/edge feed frame."""
+    if photo is not None:
+        return photo.getvalue(), "dashboard_camera"
+    feed = fetch_edge_feed(1)
+    frame = (feed or {}).get("latest_frame")
+    if frame and frame.get("frame_b64"):
+        return base64.b64decode(frame["frame_b64"]), "dashboard_feed"
+    return None, ""
+
+
+@st.fragment
+def render_edge_detect_controls() -> None:
+    """Detect button, browser camera and Luna result.
+
+    A fragment: interacting here reruns only this block — never the reconciliation log,
+    rejections or health sections, and it does not depend on the global refresh button.
+    """
+    det_col, clear_col = st.columns([3, 1])
+    with det_col:
+        detect = st.button(
+            "🔍 Detect",
+            type="primary",
+            use_container_width=True,
+            key="edge_feed_detect",
+            help="Capture the browser-camera photo (or, with no photo, the latest feed frame) "
+            "and send it to Luna for analysis.",
+        )
+    with clear_col:
+        clear = st.button(
+            "Clear edge feed", use_container_width=True, key="edge_feed_clear"
+        )
+
+    with st.expander("Browser camera (used by Detect)", expanded=True):
+        photo = st.camera_input("Point the camera at a product", key="edge_feed_camera")
+        st.caption(
+            "Detect analyzes this photo. With no photo taken it re-analyzes the latest "
+            "frame in the feed below (e.g. from `edge_camera.py`)."
+        )
+
+    if clear:
+        purge_edge_feed()
+        st.session_state.pop("edge_feed_last_analysis", None)
+        st.rerun()  # app scope: refresh the live feed fragment immediately
+
+    if detect:
+        frame_bytes, source = _resolve_detect_frame(photo)
+        if frame_bytes is None:
+            st.session_state["edge_feed_last_analysis"] = {
+                "error": "No frame to detect. Take a photo above, or run "
+                "`python3 edge_camera.py` to put a frame in the feed."
+            }
+        else:
+            with st.spinner("Classifying frame with Luna…"):
+                result = analyze_camera_frame(frame_bytes, source=source)
+            result["frame_source"] = source
+            st.session_state["edge_feed_last_analysis"] = result
+        st.rerun()  # app scope: pull the new capture into the live feed immediately
+
+    analysis = st.session_state.get("edge_feed_last_analysis")
+    if analysis:
+        if analysis.get("error"):
+            st.error(analysis["error"])
+        else:
+            decision = analysis.get("decision", {})
+            source_label = (
+                "latest feed frame"
+                if analysis.get("frame_source") == "dashboard_feed"
+                else "browser camera"
+            )
+            summary = (
+                f"[{source_label}] {decision.get('catalog_key')} · {decision.get('condition')} · "
+                f"{float(decision.get('confidence', 0)) * 100:.0f}%"
+            )
+            if analysis.get("http_status") == 200:
+                st.success(f"{summary} → {analysis.get('routing')}")
+            else:
+                st.warning(f"{summary} → rejected: {analysis.get('detail')}")
+
+
+def render_edge_camera_panel() -> None:
+    """API Bouncer tab: Detect + browser camera + live edge_camera.py feed and confidence telemetry.
+
+    Always rendered (not gated by the global bouncer refresh). The auto-refresh toggle lives
+    outside the fragments so changing it re-registers the live fragment's ``run_every``.
+    """
+    st.markdown("#### Edge Camera — Live Feed & Confidence Telemetry")
+    live = st.toggle("Auto-refresh every 3s", value=True, key="edge_feed_live")
+    render_edge_detect_controls()
+    st.fragment(run_every="3s" if live else None)(render_edge_feed_body)()
+
+
+_BOUNCER_INGRESS_CACHE_KEY = "bouncer_ingress_snapshot"
+
+
+def _fetch_bouncer_ingress_snapshot() -> dict:
+    return {
+        "health": fetch_bouncer_health(),
+        "rejections": fetch_bouncer_rejections(),
+        "reconciliations": fetch_bouncer_reconciliations(),
+    }
+
+
+@st.fragment
+def render_bouncer_ingress_section() -> None:
+    """Network health + Active API Rejections + Live Reconciliation Log.
+
+    A fragment fed from a session-state snapshot that ONLY the refresh button (or purge)
+    rewrites, so edge-camera activity and auto-refresh never re-query or re-render it.
+    """
+    if st.button("Refresh bouncer telemetry", key="load_bouncer_tab"):
+        st.session_state[_BOUNCER_TAB_LOADED_KEY] = True
+        st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
+
+    snapshot = st.session_state.get(_BOUNCER_INGRESS_CACHE_KEY)
+    if not st.session_state.get(_BOUNCER_TAB_LOADED_KEY, False) or snapshot is None:
+        st.caption(
+            "Click **Refresh bouncer telemetry** to fetch network health, rejections, "
+            "throttle limits and the reconciliation log from the FastAPI middleware. "
+            "The edge camera section above updates independently."
+        )
+        return
+
+    health = snapshot["health"]
+    rejections = snapshot["rejections"]
+    reconciliations = snapshot["reconciliations"]
+
+    if health:
+        h1, h2, h3, h4 = st.columns(4)
+        with h1:
+            st.metric("Middleware Status", health.get("status", "unknown").upper())
+        with h2:
+            st.metric("Rejections (1h)", health.get("rejections_last_hour", 0))
+        with h3:
+            st.metric("Reconciliations", health.get("reconciliations_total", 0))
+        with h4:
+            st.metric("CV Rate Limit / min", health.get("rate_limit_per_minute", "—"))
+
+        st.markdown("#### Throttle & Integrity Limits")
+        limits_col1, limits_col2, limits_col3 = st.columns(3)
+        with limits_col1:
+            st.metric("Fill Rate Limit / min", health.get("fill_rate_limit_per_minute", "—"))
+        with limits_col2:
+            st.metric("Max Payload (bytes)", health.get("max_body_bytes", "—"))
+        with limits_col3:
+            st.metric("Edge Token Armed", "Yes" if health.get("edge_token_configured") else "No")
+        st.caption(f"WAL audit buffer: `{health.get('wal_buffer_path', 'bouncer_audit.db')}`")
+    else:
+        st.warning(
+            "Unable to reach bouncer health endpoint. Ensure the FastAPI backend is running "
+            "and `API_BASE_URL` resolves (Docker Compose sets this to the backend service)."
+        )
+
+    st.divider()
+    st.markdown("#### Active API Rejections")
+    if rejections:
+        st.dataframe(
+            pd.DataFrame(rejections),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No rejected ingress payloads recorded in the bouncer WAL buffer.")
+
+    st.divider()
+    st.markdown("#### Live Reconciliation Log")
+    if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
+        if handle_purge_reconciliation_log():
+            st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
+            st.rerun()  # app scope: purge also resets dashboard-wide state
+    if reconciliations:
+        render_bouncer_reconciliation_dashboard(reconciliations)
+    else:
+        st.info(
+            "No CV reconciliations yet. Run `python3 tests/simulate_cv_traffic.py` "
+            "against the integrated middleware."
+        )
+
+
 def _bouncer_row_payload(row: dict) -> dict:
     nested = row.get("payload")
     if isinstance(nested, dict):
@@ -352,7 +755,7 @@ def _bouncer_reconciliation_row_html(row: dict) -> str:
         "<tr>"
         "<td>"
         f'<span class="bouncer-trace-id">{trace_id}</span><br>'
-        f'<span class="bouncer-sku-label">{product_name}</span><br>'
+        f'<span class="bouncer-product-name">{product_name}</span>'
         f'<span class="bouncer-ean-pill">EAN {ean}</span>'
         "</td>"
         f'<td><span class="bouncer-badge {status_class}">{status_icon} {status_esc}</span></td>'
@@ -393,6 +796,8 @@ def build_bouncer_reconciliation_html(reconciliations: list[dict]) -> str:
         " font-size: 0.75rem; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }"
         "td { background: #0e1117; }"
         ".bouncer-sku-label { font-weight: 700; color: #fafafa; }"
+        ".bouncer-product-name { display: block; margin: 4px 0 2px; font-size: 1.05rem;"
+        " font-weight: 700; color: #fafafa; line-height: 1.3; letter-spacing: -0.01em; }"
         ".bouncer-trace-id { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"
         " font-size: 0.7rem; color: #a3a8b8; letter-spacing: 0.05em; }"
         ".bouncer-ean-pill { display: inline-block; margin-top: 6px; padding: 0.2rem 0.6rem;"
@@ -1821,7 +2226,13 @@ def _bouncer_product_display_name(row: dict) -> str:
         catalog_name = _CATALOG_BY_EAN.get(parent_sku[4:])
         if catalog_name:
             return catalog_name
-    return parent_sku or "Unknown product"
+    # CV catalog + legacy ledger names (same lookup the backend attaches to the payload).
+    resolved = resolve_product_name(ean, parent_sku)
+    if resolved:
+        return resolved
+    if parent_sku.upper().startswith("EAN-") or not parent_sku:
+        return "Unmapped product"
+    return parent_sku
 
 
 def _active_flattop_count() -> int:
@@ -3307,69 +3718,12 @@ with tab5:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_API_BOUNCER
     st.subheader("API Bouncer — Network Health & Ingress Controls")
 
-    if st.button("Refresh bouncer telemetry", key="load_bouncer_tab"):
-        st.session_state[_BOUNCER_TAB_LOADED_KEY] = True
-        st.rerun()
+    # Two independent regions: the edge camera (Detect + live feed) is always on and never waits
+    # for the global refresh; the ingress section only updates when its own button is clicked.
+    render_edge_camera_panel()
 
-    if st.session_state.get(_BOUNCER_TAB_LOADED_KEY, False):
-        health = fetch_bouncer_health()
-        rejections = fetch_bouncer_rejections()
-        reconciliations = fetch_bouncer_reconciliations()
-
-        if health:
-            h1, h2, h3, h4 = st.columns(4)
-            with h1:
-                st.metric("Middleware Status", health.get("status", "unknown").upper())
-            with h2:
-                st.metric("Rejections (1h)", health.get("rejections_last_hour", 0))
-            with h3:
-                st.metric("Reconciliations", health.get("reconciliations_total", 0))
-            with h4:
-                st.metric("CV Rate Limit / min", health.get("rate_limit_per_minute", "—"))
-
-            st.markdown("#### Throttle & Integrity Limits")
-            limits_col1, limits_col2, limits_col3 = st.columns(3)
-            with limits_col1:
-                st.metric("Fill Rate Limit / min", health.get("fill_rate_limit_per_minute", "—"))
-            with limits_col2:
-                st.metric("Max Payload (bytes)", health.get("max_body_bytes", "—"))
-            with limits_col3:
-                st.metric("Edge Token Armed", "Yes" if health.get("edge_token_configured") else "No")
-            st.caption(f"WAL audit buffer: `{health.get('wal_buffer_path', 'bouncer_audit.db')}`")
-        else:
-            st.warning(
-                "Unable to reach bouncer health endpoint. Ensure the FastAPI backend is running "
-                "and `API_BASE_URL` resolves (Docker Compose sets this to the backend service)."
-            )
-
-        st.divider()
-        st.markdown("#### Active API Rejections")
-        if rejections:
-            st.dataframe(
-                pd.DataFrame(rejections),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("No rejected ingress payloads recorded in the bouncer WAL buffer.")
-
-        st.divider()
-        st.markdown("#### Live Reconciliation Log")
-        if st.button("Purge Reconciliation Log", type="primary", key="purge_bouncer_reconciliation_log"):
-            if handle_purge_reconciliation_log():
-                st.rerun()
-        if reconciliations:
-            render_bouncer_reconciliation_dashboard(reconciliations)
-        else:
-            st.info(
-                "No CV reconciliations yet. Run `python3 tests/simulate_cv_traffic.py` "
-                "against the integrated middleware."
-            )
-    else:
-        st.caption(
-            "Click **Refresh bouncer telemetry** to fetch network health, rejections, "
-            "and throttle limits from the FastAPI middleware."
-        )
+    st.divider()
+    render_bouncer_ingress_section()
 
 with tab6:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_SHOPFLOOR_SCENARIOS

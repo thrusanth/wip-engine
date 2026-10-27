@@ -7,15 +7,18 @@ import json
 import os
 import sys
 
-import cv2
 import requests
 
 from services.cv_catalog import CV_PRODUCT_CATALOG, resolve_cv_catalog_item
+from services.edge_feed import make_thumbnail_b64
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 LUNA_MODEL = "gpt-6-luna"
-BOUNCER_DAMAGE_URL = "http://127.0.0.1:8000/api/cv/damage-event"
-EDGE_API_KEY = "edge-cam-prod-992-xtz"
+# Override to feed the live dashboard, e.g. BOUNCER_DAMAGE_URL=https://<backend>/api/cv/damage-event
+BOUNCER_DAMAGE_URL = os.getenv(
+    "BOUNCER_DAMAGE_URL", "http://127.0.0.1:8000/api/cv/damage-event"
+)
+EDGE_API_KEY = os.getenv("BOUNCER_EDGE_TOKEN", "edge-cam-prod-992-xtz")
 LUNA_UNKNOWN_CATALOG_KEY = "unknown"
 
 
@@ -56,6 +59,8 @@ USER_PROMPT = (
 
 def capture_and_encode() -> str:
     """Headless webcam capture: warm-up reads, terminal Enter to snap, return base64 JPEG."""
+    import cv2  # lazy: the deployed backend imports this module for Luna but has no webcam/OpenCV
+
     cam = cv2.VideoCapture(1)
     if not cam.isOpened():
         cam.release()
@@ -166,8 +171,11 @@ def evaluate_damage_with_luna(base64_image: str) -> dict[str, float | str | int]
     }
 
 
-def trigger_bouncer_webhook(decision_data: dict[str, float | str | int]) -> dict:
-    """POST damage classification to the local API Bouncer CV ingestion route."""
+def trigger_bouncer_webhook(
+    decision_data: dict[str, float | str | int],
+    frame_thumbnail_b64: str | None = None,
+) -> dict:
+    """POST damage classification (and a frame thumbnail for the live feed) to the API Bouncer."""
     catalog_key = str(
         decision_data.get("catalog_key") or LUNA_UNKNOWN_CATALOG_KEY
     )
@@ -176,7 +184,10 @@ def trigger_bouncer_webhook(decision_data: dict[str, float | str | int]) -> dict
         "condition": str(decision_data["condition"]),
         "confidence_score": float(decision_data["confidence"]),
         "loose_units_visible": int(decision_data.get("loose_units_visible", 0)),
+        "source": "edge_camera",
     }
+    if frame_thumbnail_b64:
+        payload["frame_thumbnail_b64"] = frame_thumbnail_b64
 
     response = requests.post(
         BOUNCER_DAMAGE_URL,
@@ -209,7 +220,9 @@ if __name__ == "__main__":
         decision = evaluate_damage_with_luna(image_b64)
         print(f"Model decision: {decision}")
         print("Triggering API Bouncer webhook…")
-        bouncer_result = trigger_bouncer_webhook(decision)
+        bouncer_result = trigger_bouncer_webhook(
+            decision, frame_thumbnail_b64=make_thumbnail_b64(image_b64)
+        )
         print(json.dumps(bouncer_result, indent=2))
     except KeyboardInterrupt:
         print("\nAborted.", file=sys.stderr)
