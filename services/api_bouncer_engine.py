@@ -285,10 +285,8 @@ def _apply_torn_multipack_violation(
     transaction_payload = TransactionEnginePayload(
         transaction_type="BOM_DECOMPOSITION_WITH_PRICING",
         reason_code="DAMAGED_FORMAT_PROPORTIONAL_SPLIT",
-        ledger_adjustments={
-            payload.parent_sku: -1,
-            ledger_data.linked_child_sku + "-WASTE": payload.loose_units_visible,
-        },
+        # Only the parent multipack is deducted; loose-unit counts are not ledgered.
+        ledger_adjustments={payload.parent_sku: -1},
         calculated_unit_price=final_unit_price,
         compliance_rule_applied=rule_applied,
     )

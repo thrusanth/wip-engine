@@ -40,14 +40,6 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-05",
     },
-    "coca_cola_zero_8pk": {
-        "ean": "5449000031341",
-        "name": "Coca-Cola Zero Sugar 8x330ml Multipack",
-        "parent_price": 4.50,
-        "pack_size": 8,
-        "child_sku_suffix": "SINGLE-WASTE",
-        "planogram_location": "CAM-AISLE-04",
-    },
     "schweppes_lemonade_2l": {
         "ean": "5000193900861",
         "name": "Schweppes Lemonade 2L BTL",
@@ -111,6 +103,38 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "pack_size": 1,
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-06",
+    },
+    "stella_artois_4pk": {
+        "ean": "5014379028089",
+        "name": "Stella Artois Lager 4x568ml",
+        "parent_price": 7.00,
+        "pack_size": 4,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "BEERS-WINES-01",
+    },
+    "nestle_water_12pk": {
+        "ean": "7613031722662",
+        "name": "Nestle Pure Life Water 12x500ml",
+        "parent_price": 2.90,
+        "pack_size": 12,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "SOFT-DRINKS-02",
+    },
+    "coke_zero_8pk": {
+        "ean": "5449000031341",
+        "name": "Coke Zero 8x330ml",
+        "parent_price": 4.90,
+        "pack_size": 8,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "SOFT-DRINKS-02",
+    },
+    "walkers_cheese_onion_6pk": {
+        "ean": "5000328375373",
+        "name": "Walkers Cheese & Onion Crisps 6x25g",
+        "parent_price": 2.50,
+        "pack_size": 6,
+        "child_sku_suffix": "SINGLE-WASTE",
+        "planogram_location": "CAM-AISLE-04",
     },
 }
 

@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from models.bouncer_schemas import (
     DamageEventPayload,
@@ -13,6 +13,8 @@ from services.api_bouncer_engine import (
     effective_damage_condition,
     process_damage_event,
 )
+from middleware.api_bouncer import _client_key
+from services.bouncer_buffer import record_rejection
 from services.cv_catalog import expected_ledger_from_cv_item, resolve_cv_catalog_item
 from services.edge_feed import (
     ROUTING_REJECTED,
@@ -26,6 +28,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cv", tags=["cv-ingestion"])
 
 
+def _cv_rejection_reason(error: HTTPException) -> str:
+    detail = str(error.detail)
+    if error.status_code == status.HTTP_404_NOT_FOUND:
+        return "CV_UNKNOWN_ITEM"
+    if "confidence" in detail.lower():
+        return "CV_LOW_CONFIDENCE"
+    if "Unsupported condition" in detail:
+        return "CV_UNSUPPORTED_CONDITION"
+    return "CV_REJECTED"
+
+
+def _log_cv_rejection(
+    *, request: Optional[Request], payload: DamageEventPayload, error: HTTPException
+) -> None:
+    """Write a CV-level rejection into the bouncer WAL so 'Active API Rejections' shows it."""
+    try:
+        preview = (
+            f"item={payload.item_name} condition={payload.condition} "
+            f"confidence={payload.confidence_score:.2f} "
+            f"source={payload.source or 'edge_camera'}"
+        )
+        record_rejection(
+            path=request.url.path if request else "/api/cv/damage-event",
+            reason_code=_cv_rejection_reason(error),
+            detail=f"HTTP {error.status_code}: {error.detail}",
+            client_ip=_client_key(request) if request else None,
+            payload_preview=preview,
+        )
+    except Exception:  # noqa: BLE001 - logging must not mask the original rejection
+        logger.exception("Failed to record CV rejection in bouncer WAL")
+
+
 def _record_feed(
     *,
     payload: DamageEventPayload,
@@ -33,8 +67,11 @@ def _record_feed(
     item: Optional[dict],
     reconciliation=None,
     error: Optional[HTTPException] = None,
+    request: Optional[Request] = None,
 ) -> None:
     """Best-effort live-feed telemetry; never blocks or fails CV ingestion."""
+    if error is not None:
+        _log_cv_rejection(request=request, payload=payload, error=error)
     try:
         raw_condition = payload.condition.strip().upper()
         effective = effective_damage_condition(raw_condition, payload.loose_units_visible)
@@ -77,14 +114,18 @@ def _record_feed(
         logger.exception("Failed to record edge feed event")
 
 
-def _ingest(payload: DamageEventPayload) -> DamageEventResponse:
+def _ingest(
+    payload: DamageEventPayload, request: Optional[Request] = None
+) -> DamageEventResponse:
     resolved = resolve_cv_catalog_item(payload.item_name)
     if not resolved:
         error = HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown CV catalog item: {payload.item_name}",
         )
-        _record_feed(payload=payload, catalog_key=None, item=None, error=error)
+        _record_feed(
+            payload=payload, catalog_key=None, item=None, error=error, request=request
+        )
         raise error
     catalog_key, item = resolved
 
@@ -100,7 +141,13 @@ def _ingest(payload: DamageEventPayload) -> DamageEventResponse:
     try:
         reconciliation = process_damage_event(catalog_payload)
     except HTTPException as exc:
-        _record_feed(payload=payload, catalog_key=catalog_key, item=item, error=exc)
+        _record_feed(
+            payload=payload,
+            catalog_key=catalog_key,
+            item=item,
+            error=exc,
+            request=request,
+        )
         raise
     except Exception:
         logger.exception(
@@ -129,15 +176,17 @@ def _ingest(payload: DamageEventPayload) -> DamageEventResponse:
     response_model=DamageEventResponse,
     status_code=status.HTTP_200_OK,
 )
-def ingest_damage_event(payload: DamageEventPayload) -> DamageEventResponse:
+def ingest_damage_event(
+    payload: DamageEventPayload, request: Request
+) -> DamageEventResponse:
     """
     Edge camera damage webhook — idempotent on trx_id, WAL reconciliation ledger.
     """
-    return _ingest(payload)
+    return _ingest(payload, request)
 
 
 @router.post("/analyze-frame", status_code=status.HTTP_200_OK)
-def analyze_frame(payload: FrameAnalyzePayload) -> dict:
+def analyze_frame(payload: FrameAnalyzePayload, request: Request) -> dict:
     """
     Classify a camera frame with Luna (same pipeline as edge_camera.py), then route it
     through the API Bouncer. Always answers 200 with the decision + routing outcome so
@@ -174,7 +223,7 @@ def analyze_frame(payload: FrameAnalyzePayload) -> dict:
         frame_thumbnail_b64=thumbnail,
     )
     try:
-        result = _ingest(event)
+        result = _ingest(event, request)
     except HTTPException as exc:
         return {
             "decision": decision,

@@ -1,5 +1,6 @@
 import base64
 import copy
+import hashlib
 import html
 import json
 import os
@@ -456,7 +457,7 @@ def render_edge_feed_body(limit: int = 25) -> None:
         else:
             st.info(
                 "No frame received yet. Run `python3 edge_camera.py` (set `BOUNCER_DAMAGE_URL` "
-                "to this backend) or take a photo and press **Detect**."
+                "to this backend) or take a photo with the browser camera above."
             )
     with card_col:
         if events:
@@ -499,44 +500,28 @@ def render_edge_feed_body(limit: int = 25) -> None:
         )
 
 
-def _resolve_detect_frame(photo) -> tuple[bytes | None, str]:
-    """Frame for the Detect button: browser camera photo first, else the latest simulated/edge feed frame."""
-    if photo is not None:
-        return photo.getvalue(), "dashboard_camera"
-    feed = fetch_edge_feed(1)
-    frame = (feed or {}).get("latest_frame")
-    if frame and frame.get("frame_b64"):
-        return base64.b64decode(frame["frame_b64"]), "dashboard_feed"
-    return None, ""
+_EDGE_LAST_PHOTO_KEY = "edge_feed_last_photo_digest"
 
 
 @st.fragment
 def render_edge_detect_controls() -> None:
-    """Detect button, browser camera and Luna result.
+    """Browser camera with automatic Luna detection and the latest result.
 
     A fragment: interacting here reruns only this block — never the reconciliation log,
     rejections or health sections, and it does not depend on the global refresh button.
+    Taking a photo triggers detection immediately; clearing it resets to waiting.
     """
-    det_col, clear_col = st.columns([3, 1])
-    with det_col:
-        detect = st.button(
-            "🔍 Detect",
-            type="primary",
-            use_container_width=True,
-            key="edge_feed_detect",
-            help="Capture the browser-camera photo (or, with no photo, the latest feed frame) "
-            "and send it to Luna for analysis.",
-        )
+    _, clear_col = st.columns([3, 1])
     with clear_col:
         clear = st.button(
             "Clear edge feed", use_container_width=True, key="edge_feed_clear"
         )
 
-    with st.expander("Browser camera (used by Detect)", expanded=True):
+    with st.expander("Browser camera (auto-detect on capture)", expanded=True):
         photo = st.camera_input("Point the camera at a product", key="edge_feed_camera")
         st.caption(
-            "Detect analyzes this photo. With no photo taken it re-analyzes the latest "
-            "frame in the feed below (e.g. from `edge_camera.py`)."
+            "Detection runs automatically as soon as a photo is taken. "
+            "Clear the photo to wait for the next capture."
         )
 
     if clear:
@@ -544,19 +529,35 @@ def render_edge_detect_controls() -> None:
         st.session_state.pop("edge_feed_last_analysis", None)
         st.rerun()  # app scope: refresh the live feed fragment immediately
 
-    if detect:
-        frame_bytes, source = _resolve_detect_frame(photo)
-        if frame_bytes is None:
-            st.session_state["edge_feed_last_analysis"] = {
-                "error": "No frame to detect. Take a photo above, or run "
-                "`python3 edge_camera.py` to put a frame in the feed."
-            }
-        else:
+    frame_bytes = None
+    if photo is not None:
+        try:
+            frame_bytes = photo.getvalue()
+        except Exception:
+            frame_bytes = None
+
+    if not frame_bytes:
+        # Photo cleared (or unreadable): forget it and wait for the next capture.
+        if st.session_state.pop(_EDGE_LAST_PHOTO_KEY, None) is not None:
+            st.session_state.pop("edge_feed_last_analysis", None)
+            st.rerun()  # app scope: drop the stale result from the live feed too
+    else:
+        digest = hashlib.md5(frame_bytes).hexdigest()
+        if st.session_state.get(_EDGE_LAST_PHOTO_KEY) != digest:
+            # Mark first so a failed analysis never retries in a loop on rerun.
+            st.session_state[_EDGE_LAST_PHOTO_KEY] = digest
             with st.spinner("Classifying frame with Luna…"):
-                result = analyze_camera_frame(frame_bytes, source=source)
-            result["frame_source"] = source
+                result = analyze_camera_frame(frame_bytes, source="dashboard_camera")
+            result["frame_source"] = "dashboard_camera"
             st.session_state["edge_feed_last_analysis"] = result
-        st.rerun()  # app scope: pull the new capture into the live feed immediately
+            # Same fetch as the "Refresh bouncer telemetry" button, so the new entry shows up
+            # in the Live Reconciliation Log (and any CV rejection in Active API Rejections).
+            with st.spinner("Refreshing bouncer telemetry…"):
+                try:
+                    refresh_bouncer_ingress_snapshot()
+                except Exception:
+                    pass  # best effort; the manual refresh button remains as a fallback
+            st.rerun()  # app scope: repaint the live feed and the ingress section together
 
     analysis = st.session_state.get("edge_feed_last_analysis")
     if analysis:
@@ -564,11 +565,7 @@ def render_edge_detect_controls() -> None:
             st.error(analysis["error"])
         else:
             decision = analysis.get("decision", {})
-            source_label = (
-                "latest feed frame"
-                if analysis.get("frame_source") == "dashboard_feed"
-                else "browser camera"
-            )
+            source_label = "browser camera"
             summary = (
                 f"[{source_label}] {decision.get('catalog_key')} · {decision.get('condition')} · "
                 f"{float(decision.get('confidence', 0)) * 100:.0f}%"
@@ -580,7 +577,7 @@ def render_edge_detect_controls() -> None:
 
 
 def render_edge_camera_panel() -> None:
-    """API Bouncer tab: Detect + browser camera + live edge_camera.py feed and confidence telemetry.
+    """API Bouncer tab: auto-detecting browser camera + live edge_camera.py feed and confidence telemetry.
 
     Always rendered (not gated by the global bouncer refresh). The auto-refresh toggle lives
     outside the fragments so changing it re-registers the live fragment's ``run_every``.
@@ -602,6 +599,15 @@ def _fetch_bouncer_ingress_snapshot() -> dict:
     }
 
 
+def refresh_bouncer_ingress_snapshot() -> None:
+    """Re-query health, rejections and the reconciliation log into session state.
+
+    Shared by the "Refresh bouncer telemetry" button and the auto-detect flow.
+    """
+    st.session_state[_BOUNCER_TAB_LOADED_KEY] = True
+    st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
+
+
 @st.fragment
 def render_bouncer_ingress_section() -> None:
     """Network health + Active API Rejections + Live Reconciliation Log.
@@ -609,9 +615,17 @@ def render_bouncer_ingress_section() -> None:
     A fragment fed from a session-state snapshot that ONLY the refresh button (or purge)
     rewrites, so edge-camera activity and auto-refresh never re-query or re-render it.
     """
+    # First run of the session: populate the log immediately, then never auto-fetch again
+    # on ordinary reruns (the button and the auto-detect flow handle later refreshes).
+    if "telemetry_initialized" not in st.session_state:
+        try:
+            refresh_bouncer_ingress_snapshot()
+        except Exception:
+            pass  # backend unreachable: the manual refresh button remains as a fallback
+        st.session_state.telemetry_initialized = True
+
     if st.button("Refresh bouncer telemetry", key="load_bouncer_tab"):
-        st.session_state[_BOUNCER_TAB_LOADED_KEY] = True
-        st.session_state[_BOUNCER_INGRESS_CACHE_KEY] = _fetch_bouncer_ingress_snapshot()
+        refresh_bouncer_ingress_snapshot()
 
     snapshot = st.session_state.get(_BOUNCER_INGRESS_CACHE_KEY)
     if not st.session_state.get(_BOUNCER_TAB_LOADED_KEY, False) or snapshot is None:
@@ -1982,15 +1996,6 @@ div[class*="st-key-btn_print_"] button {
                             st.session_state.pda_selected_trace_id = None
                             st.rerun()
 
-                        if st.button(
-                            "⬅️ Back to Queue",
-                            key="pda_back_to_queue",
-                            type="secondary",
-                            use_container_width=True,
-                        ):
-                            st.session_state.pda_selected_trace_id = None
-                            st.rerun()
-
                         item_name = html.escape(_pda_item_name(pending_task))
                         markdown_price = _pda_markdown_price(pending_task)
                         price_display = (
@@ -2187,7 +2192,10 @@ div[data-testid="stVerticalBlock"].st-key-fill_scroll_container::-webkit-scrollb
                     back_col, home_col, menu_col = st.columns(3)
                     with back_col:
                         if st.button("◁", key="btn_nav_back", use_container_width=True):
-                            if st.session_state.pda_view in (
+                            if st.session_state.get("pda_selected_trace_id"):
+                                # Hardware back from an open print task -> pending queue.
+                                st.session_state.pda_selected_trace_id = None
+                            elif st.session_state.pda_view in (
                                 "history",
                                 "epw_detail",
                                 "visitor_detail",
@@ -3718,7 +3726,7 @@ with tab5:
     st.session_state[_DASHBOARD_ACTIVE_TAB_KEY] = TAB_API_BOUNCER
     st.subheader("API Bouncer — Network Health & Ingress Controls")
 
-    # Two independent regions: the edge camera (Detect + live feed) is always on and never waits
+    # Two independent regions: the edge camera (auto-detect + live feed) is always on and never waits
     # for the global refresh; the ingress section only updates when its own button is clicked.
     render_edge_camera_panel()
 
