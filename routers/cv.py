@@ -74,7 +74,9 @@ def _record_feed(
         _log_cv_rejection(request=request, payload=payload, error=error)
     try:
         raw_condition = payload.condition.strip().upper()
-        effective = effective_damage_condition(raw_condition, payload.loose_units_visible)
+        effective = effective_damage_condition(
+            raw_condition, payload.loose_units_visible, catalog_key or payload.item_name
+        )
         threshold = confidence_floor_for_condition(effective)
         case_size = max(1, int(item["pack_size"])) if item else None
         expected_format = None

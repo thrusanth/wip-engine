@@ -37,6 +37,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Coca Cola Regular 8x330ml",
         "parent_price": 6.00,
         "pack_size": 8,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-05",
     },
@@ -53,6 +54,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Diet Coke Caffeine Free 8x300ml",
         "parent_price": 4.70,
         "pack_size": 8,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-05",
     },
@@ -61,6 +63,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Fosters Lager 4x440ml",
         "parent_price": 4.50,
         "pack_size": 4,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-06",
     },
@@ -69,6 +72,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Budweiser 4x440ml",
         "parent_price": 5.00,
         "pack_size": 4,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "CAM-AISLE-06",
     },
@@ -109,6 +113,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Stella Artois Lager 4x568ml",
         "parent_price": 7.00,
         "pack_size": 4,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "BEERS-WINES-01",
     },
@@ -125,6 +130,7 @@ CV_PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "name": "Coke Zero 8x330ml",
         "parent_price": 4.90,
         "pack_size": 8,
+        "expected_format": "CARDBOARD_MULTIPACK",
         "child_sku_suffix": "SINGLE-WASTE",
         "planogram_location": "SOFT-DRINKS-02",
     },
@@ -200,6 +206,8 @@ def expected_ledger_from_cv_item(item: dict[str, Any]) -> ExpectedLedger:
         expected_format = "SHRINK_WRAPPED_MULTIPACK"
     else:
         expected_format = "SINGLE_ITEM"
+    # Optional per-item packaging override (e.g. cardboard sleeves instead of shrink wrap).
+    expected_format = str(item.get("expected_format") or expected_format)
 
     name_lower = name.lower()
     is_alcohol = any(

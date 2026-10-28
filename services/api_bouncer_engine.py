@@ -32,8 +32,12 @@ from services.shopfloor_catalog import (
 )
 
 MUP_RATE_PER_UNIT = float(os.getenv("BOUNCER_MUP_RATE_PER_UNIT", "0.65"))
-CV_MIN_CONFIDENCE_INTACT = 0.80
+CV_MIN_CONFIDENCE_INTACT = 0.75
 CV_MIN_CONFIDENCE_DAMAGE = 0.70
+
+# Logistical (clear-wrap) SKUs: visible loose bottles are torn outer plastic with no retail
+# value, so loose_units_visible must never force the TORN_MULTIPACK / write-off path.
+LOOSE_UNIT_OVERRIDE_EXEMPT_CATALOG_KEYS = frozenset({"british_mineral_water_2l"})
 
 _LEGACY_LEDGER: dict[str, ExpectedLedger] = {
     "SKU-WATER-6PK": ExpectedLedger(
@@ -145,16 +149,32 @@ def _ledger_for_ean(ean: str) -> Optional[ExpectedLedger]:
     return CENTRAL_LEDGER_DB.get(parent_sku_for_ean(ean))
 
 
+MULTIPACK_EXPECTED_FORMATS = frozenset({"SHRINK_WRAPPED_MULTIPACK", "CARDBOARD_MULTIPACK"})
+
+
 def _ledger_is_shrink_wrapped_multipack(ledger_data: ExpectedLedger) -> bool:
-    """Ledger-driven multipack check (no product-name parsing)."""
-    return ledger_data.expected_format == "SHRINK_WRAPPED_MULTIPACK"
+    """Ledger-driven multipack check (no product-name parsing). Covers shrink-wrapped and
+    cardboard multipacks: both break into loose units and take the pro-rata markdown path."""
+    return ledger_data.expected_format in MULTIPACK_EXPECTED_FORMATS
+
+
+def is_loose_unit_override_exempt(identifier: Optional[str]) -> bool:
+    """True when the catalog item (slug, exact name or EAN) is exempt from the loose-unit override."""
+    if not identifier:
+        return False
+    resolved = resolve_cv_catalog_item(str(identifier).strip())
+    return bool(resolved and resolved[0] in LOOSE_UNIT_OVERRIDE_EXEMPT_CATALOG_KEYS)
 
 
 def _is_intact_detection(payload: CVEdgeDetection, ledger_data: ExpectedLedger) -> bool:
-    """Healthy stock: presented exactly as the ledger expects, no exception, no loose units."""
+    """Healthy stock: presented exactly as the ledger expects, no exception, no loose units
+    (loose units are ignored for logistical-wrap SKUs)."""
+    no_loose_units = int(payload.loose_units_visible) == 0 or is_loose_unit_override_exempt(
+        ledger_data.ean
+    )
     return (
         not payload.exception_type
-        and int(payload.loose_units_visible) == 0
+        and no_loose_units
         and payload.detected_format == ledger_data.expected_format
     )
 
@@ -168,11 +188,23 @@ def _min_confidence_for_detection(
     return CV_MIN_CONFIDENCE_DAMAGE
 
 
-def effective_damage_condition(condition: str, loose_units_visible: int) -> str:
+def effective_damage_condition(
+    condition: str, loose_units_visible: int, item: Optional[str] = None
+) -> str:
     """Physical evidence beats Luna's label: loose units mean the pack is compromised,
-    even if the raw condition says INTACT (e.g. a taped-up multipack)."""
+    even if the raw condition says INTACT (e.g. a taped-up multipack).
+
+    ``item`` (catalog slug, name or EAN) lets logistical-wrap SKUs such as
+    ``british_mineral_water_2l`` skip this override: their torn outer plastic has no retail value.
+    """
     normalized = condition.strip().upper()
-    if normalized == "INTACT" and int(loose_units_visible or 0) > 0:
+    if is_loose_unit_override_exempt(item) and normalized == "TORN_MULTIPACK":
+        return "INTACT"
+    if (
+        normalized == "INTACT"
+        and int(loose_units_visible or 0) > 0
+        and not is_loose_unit_override_exempt(item)
+    ):
         return "TORN_MULTIPACK"
     return normalized
 
@@ -373,7 +405,7 @@ def _damage_event_to_cv_detection(
     model_loose = max(0, int(payload.loose_units_visible or 0))
     loose_units_visible = 0
 
-    condition = effective_damage_condition(condition, model_loose)
+    condition = effective_damage_condition(condition, model_loose, stock_name)
 
     if condition == "TORN_MULTIPACK":
         exception_type = "TORN_MULTIPACK"

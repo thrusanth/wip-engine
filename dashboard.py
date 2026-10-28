@@ -439,7 +439,7 @@ def render_edge_feed_body(limit: int = 25) -> None:
     k4.metric("Damaged", summary.get("damaged", 0))
     k5.metric("Rejected", summary.get("rejected", 0))
     st.caption(
-        f"Confidence floors — INTACT ≥ {floors.get('intact', 0.8) * 100:.0f}%, "
+        f"Confidence floors — INTACT ≥ {floors.get('intact', 0.75) * 100:.0f}%, "
         f"damage ≥ {floors.get('damage', 0.7) * 100:.0f}%. "
         "Loose units force the damage floor regardless of Luna's raw condition."
     )

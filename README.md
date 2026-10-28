@@ -28,7 +28,7 @@ The **API Bouncer** layer (merged from the standalone `api_bouncer` project) sit
   - `POST /api/v1/bouncer/cv-detection` (primary CV webhook)
   - `POST /webhook/cv-detection` (legacy simulator compatibility)
   - `POST /api/v1/telemetry/fill` (edge fill telemetry destined for engine + offline audit)
-- **Reconciliation engine (`services/api_bouncer_engine.py`):** Validates CV confidence (≥ 0.80 for INTACT stock, ≥ 0.70 for damage detections), compares detected shelf formats against the central ledger, performs BOM decomposition for torn multipacks, and applies UK alcohol pricing floors (England Duty+VAT vs Scotland/Wales MUP).
+- **Reconciliation engine (`services/api_bouncer_engine.py`):** Validates CV confidence (≥ 0.75 for INTACT stock, ≥ 0.70 for damage detections), compares detected shelf formats against the central ledger, performs BOM decomposition for torn multipacks, and applies UK alcohol pricing floors (England Duty+VAT vs Scotland/Wales MUP).
 - **Edge camera live feed (`services/edge_feed.py`):** Every `/api/cv/damage-event` capture (accepted or rejected) is logged with confidence, applied floor, case size, routing and a frame thumbnail, and served at `GET /api/v1/bouncer/edge-feed` for the **API Bouncer** tab panel. `POST /api/cv/analyze-frame` runs the same Luna pipeline for browser-camera captures (needs `OPENAI_API_KEY` on the backend; `BOUNCER_ANALYZE_RATE_LIMIT_PER_MINUTE`, default 10). To feed the deployed dashboard from a local webcam: `BOUNCER_DAMAGE_URL=https://<backend>/api/cv/damage-event python3 edge_camera.py`.
 - **WAL audit buffer (`services/bouncer_buffer.py`):** Stores reconciliation outcomes and active API rejections in `bouncer_audit.db` (configurable via `BOUNCER_BUFFER_PATH`).
 

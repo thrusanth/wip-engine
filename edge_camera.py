@@ -36,11 +36,58 @@ LUNA_WATER_CLASSIFICATION_RULES = (
     "covering the middle, classify it as the multipack: british_mineral_water_6x2l. "
 )
 
+LUNA_COCA_COLA_DISAMBIGUATION_RULES = (
+    "Coca-Cola multipack disambiguation (read the box, not the colour): "
+    "Do NOT rely solely on the packaging color (red vs. black) to differentiate between "
+    "Coca-Cola variants. "
+    "You MUST read the text on the box. "
+    'If the packaging says "ZERO SUGAR", you must classify the item as coke_zero_8pk, '
+    "even if the box is predominantly red. "
+    'Only classify the item as coca_cola_8pk if it says "ORIGINAL TASTE" or explicitly '
+    'lacks the "ZERO SUGAR" label. '
+)
+
+# Condition rules for the logistical (clear) wrap: torn outer plastic is not retail damage.
+LUNA_WATER_CONDITION_RULES = (
+    "Condition rules for logistical packaging: "
+    "If the item is identified as british_mineral_water_2l (clear logistical wrap), "
+    "you must ignore torn or ripped outer plastic. "
+    "Do NOT classify the condition as TORN_MULTIPACK. "
+    "Because the clear plastic has no retail value, classify the condition as INTACT "
+    "unless you can visibly see that an individual bottle is crushed or leaking. "
+)
+
+LUNA_CARDBOARD_CONDITION_RULES = (
+    "Condition rules for cardboard sleeves and trays: "
+    "Cardboard sleeves and trays (like beer and soft drink multipacks) are intentionally "
+    "manufactured with open sides. This is their normal, undamaged state. "
+    "If you see a cardboard multipack with exposed products on the sides, you must default "
+    "to INTACT. "
+    "Do NOT classify these as TORN_MULTIPACK, CRUSHED, or any other damaged state unless "
+    "the cardboard itself is obviously and severely ripped, flattened, or structurally "
+    "destroyed. "
+)
+
+LUNA_LOOSE_UNITS_COUNTING_RULES = (
+    "Loose unit counting rules for loose_units_visible: "
+    "Do NOT count cans or bottles that are still securely held inside their multipack as "
+    "loose_units, even if they are clearly visible through the open sides of a cardboard "
+    "sleeve or clear plastic wrap. "
+    "ONLY count an item as a loose_unit if it has completely fallen out and is physically "
+    "separated from the main packaging. "
+)
+
 
 def _build_luna_system_prompt() -> str:
     keys = _luna_catalog_key_options()
     catalog_lines = "\n".join(
         f'  - {key}: {item["name"]}'
+        + (
+            " (packaged in a CARDBOARD sleeve/tray, not shrink wrap — intact cardboard "
+            "is not a torn multipack)"
+            if item.get("expected_format") == "CARDBOARD_MULTIPACK"
+            else ""
+        )
         for key, item in CV_PRODUCT_CATALOG.items()
     )
     return (
@@ -52,12 +99,15 @@ def _build_luna_system_prompt() -> str:
         + ", ".join(keys)
         + "), and "
         '"loose_units_visible" (a non-negative integer). '
-        "If the item is a torn multipack, count or estimate the number of intact, "
-        "sellable inner units visible. If none or not applicable, return 0. "
+        f"{LUNA_LOOSE_UNITS_COUNTING_RULES}"
+        "If none have fallen out or the field does not apply, return 0. "
         "You must classify the damaged item by selecting the exact matching key or name "
         "from this provided catalog list:\n"
         f"{catalog_lines}\n"
         f"{LUNA_WATER_CLASSIFICATION_RULES}"
+        f"{LUNA_COCA_COLA_DISAMBIGUATION_RULES}"
+        f"{LUNA_WATER_CONDITION_RULES}"
+        f"{LUNA_CARDBOARD_CONDITION_RULES}"
         f'Use catalog_key "{LUNA_UNKNOWN_CATALOG_KEY}" only when no catalog entry matches. '
         "Prefer returning the catalog slug key when confident. "
         "Do not include any other keys or prose."
